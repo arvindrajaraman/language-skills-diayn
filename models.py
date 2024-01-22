@@ -46,7 +46,7 @@ class SkillDiscriminatorNetwork(nn.Module):
         x = state
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        return F.softmax(self.fc3(x))
+        return F.softmax(self.fc3(x), dim=1)
     
 class SkillConvDiscriminatorNetwork(nn.Module):
     def __init__(self, state_shape, skill_size, seed, fc1_units=512, fc2_units=512):
@@ -85,7 +85,7 @@ class SkillConvDiscriminatorNetwork(nn.Module):
 
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = F.softmax(self.fc3(x))
+        x = F.softmax(self.fc3(x), dim=1)
 
         if state.dim() == 3:
             x = x.squeeze()

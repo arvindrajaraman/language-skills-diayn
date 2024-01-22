@@ -1,11 +1,8 @@
 import numpy as np
 import random
 from collections import namedtuple, deque
-import calendar
 import math
-import os
 
-import gym
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -19,70 +16,59 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class Agent():
     """Interacts with and learns from the environment."""
 
-    def __init__(self, state_size, action_size, skill_size, conv, seed,
-                 buffer_size, batch_size, gamma, tau, lr, update_every,
-                 discriminator_lr):
+    def __init__(self, config: dict, conv: bool):
         """Initialize an Agent object.
 
         Params
         ======
-            state_size (int): dimension of each state
-            action_size (int): dimension of each action
-            seed (int): random seed
+            config (dict): configurations
+            conv (bool): whether to use a convolutional discriminator and policy (i.e. if your observations are images)
         """
-        self.state_size = state_size
-        self.skill_size = skill_size
-        self.action_size = action_size
-        self.seed = random.seed(seed)
-
-        self.buffer_size = buffer_size
-        self.batch_size = batch_size
-        self.gamma = gamma
-        self.tau = tau
-        self.lr = lr
-        self.update_every = update_every
-        self.discriminator_lr = discriminator_lr
+        self.config = config
+        self.conv = conv
+        random.seed(config["seed"])
+        torch.manual_seed(config["seed"])
 
         # Q-Network
         if conv:
-            self.qnetwork_local = QConvSkillNetwork(state_size, action_size, skill_size, seed).to(device)
-            self.qnetwork_target = QConvSkillNetwork(state_size, action_size, skill_size, seed).to(device)
+            self.qnetwork_local = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["seed"]).to(device)
+            self.qnetwork_target = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["seed"]).to(device)
         else:
-            self.qnetwork_local = QSkillNetwork(state_size, action_size, skill_size, seed).to(device)
-            self.qnetwork_target = QSkillNetwork(state_size, action_size, skill_size, seed).to(device)
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=self.lr)
+            self.qnetwork_local = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["seed"]).to(device)
+            self.qnetwork_target = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["seed"]).to(device)
+        self.qnetwork_optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=config["policy_lr"])
 
         # Replay memory
-        self.memory = ReplayBuffer(action_size, self.skill_size, self.buffer_size, self.batch_size, seed)
+        self.memory = ReplayBuffer(config["action_size"], config["skill_size"], config["buffer_size"], config["batch_size"], config["seed"])
         # Initialize time step (for updating every UPDATE_EVERY steps)
         self.t_step = 0
 
-        # Skill-related
+        # Setup discriminator
         if conv:
             raise NotImplementedError
         else:
-            self.discriminator = SkillDiscriminatorNetwork(state_size, skill_size, seed).to(device)
+            self.discriminator = SkillDiscriminatorNetwork(config["state_size"], config["skill_size"], config["seed"]).to(device)
             self.discriminator.train()
             self.discriminator_criterion = nn.CrossEntropyLoss()
-            self.discriminator_optimizer = optim.SGD(self.discriminator.parameters(), lr=discriminator_lr, momentum=0.9)
+            self.discriminator_optimizer = optim.SGD(self.discriminator.parameters(), lr=config["discrim_lr"], momentum=config["discrim_momentum"])
 
     def step(self, state, action, skill_idx, next_state, done):
         # Save experience in replay memory
         self.memory.add(state, action, skill_idx, next_state, done)
 
         # Learn every UPDATE_EVERY time steps.
-        self.t_step = (self.t_step + 1) % self.update_every
+        self.t_step = (self.t_step + 1) % self.config["update_every"]
         if self.t_step == 0:
             # If enough samples are available in memory, get random subset and learn
-            if len(self.memory) >= self.batch_size:
+            if len(self.memory) >= self.config["batch_size"]:
                 experiences = self.memory.sample()
-                stats = self.learn(experiences, self.gamma)
+                stats = self.learn(experiences, self.config["gamma"])
                 stats.update(self.update_discriminator(experiences))
                 return stats
             
         return {}
 
-    def act(self, state, skill_idx, eps=0.):
+    def act(self, state, skill_idx, eps):
         """Returns actions for given state as per current policy.
 
         Params
@@ -91,7 +77,7 @@ class Agent():
             eps (float): epsilon, for epsilon-greedy action selection
         """
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
-        skill = F.one_hot(torch.tensor(skill_idx), self.skill_size).reshape(1, -1).float().to(device)
+        skill = F.one_hot(torch.tensor(skill_idx), self.config["skill_size"]).reshape(1, -1).float().to(device)
         self.qnetwork_local.eval()
         with torch.no_grad():
             action_values = self.qnetwork_local(state, skill)
@@ -101,7 +87,7 @@ class Agent():
         if random.random() > eps:
             action = np.argmax(action_values.cpu().data.numpy())
         else:
-            action = random.choice(np.arange(self.action_size))
+            action = random.choice(np.arange(self.config["action_size"]))
 
         return action
 
@@ -113,12 +99,12 @@ class Agent():
             gamma (float): discount factor
         """
         states, actions, skill_idxs, next_states, dones = experiences
-        skills = F.one_hot(skill_idxs.view(-1), self.skill_size).float().to(device)
+        skills = F.one_hot(skill_idxs.view(-1), self.config["skill_size"]).float().to(device)
         
         # Calculate rewards using current discriminator
         skill_preds = self.discriminator.forward(next_states)
         selected_probs = torch.gather(skill_preds, 1, skill_idxs)
-        rewards = torch.log(selected_probs) - math.log(1/self.skill_size)
+        rewards = torch.log(selected_probs) - math.log(1/self.config["skill_size"])
 
         # Get max predicted Q values (for next states) from target model
         Q_targets_next = self.qnetwork_target(next_states, skills).detach().max(1)[0].unsqueeze(1)
@@ -136,10 +122,11 @@ class Agent():
 
         # Compute loss
         loss = F.mse_loss(Q_expected, Q_targets) + reg_lambda * l1_reg
+
         # Minimize the loss
-        self.optimizer.zero_grad()
+        self.qnetwork_optimizer.zero_grad()
         loss.backward()
-        self.optimizer.step()
+        self.qnetwork_optimizer.step()
 
         total_norm = 0.0
         for p in self.qnetwork_local.parameters():
@@ -148,7 +135,7 @@ class Agent():
         total_norm = total_norm ** (1. / 2)
 
         # ------------------- update target network ------------------- #
-        self.soft_update(self.qnetwork_local, self.qnetwork_target, self.tau)
+        self.soft_update(self.qnetwork_local, self.qnetwork_target, self.config["tau"])
 
         return {
             "critic_loss": loss.item(),
@@ -162,7 +149,7 @@ class Agent():
         self.discriminator_optimizer.zero_grad()
 
         _, _, skill_idxs, next_states, _ = experiences
-        skills = F.one_hot(skill_idxs.view(-1), self.skill_size).float().to(device)
+        skills = F.one_hot(skill_idxs.view(-1), self.config["skill_size"]).float().to(device)
         skill_preds = self.discriminator.forward(next_states)
 
         loss = self.discriminator_criterion(skills, skill_preds)
@@ -252,52 +239,3 @@ class ReplayBuffer:
     def __len__(self):
         """Return the current size of internal memory."""
         return len(self.memory)
-
-# def train(agent,
-#     n_episodes=2000, max_t=1000, eps_start=1.0, eps_end=0.01, eps_decay=0.995):
-#     """Deep Q-Learning.
-
-#     Params
-#     ======
-#         agent: agent to train
-#         n_episodes (int): maximum number of training episodes
-#         max_t (int): maximum number of timesteps per episode
-#         eps_start (float): starting value of epsilon, for epsilon-greedy action selection
-#         eps_end (float): minimum value of epsilon
-#         eps_decay (float): multiplicative factor (per episode) for decreasing epsilon
-#     """
-#     scores = []                        # list containing scores from each episode
-#     scores_window = deque(maxlen=100)  # last 100 scores
-#     eps = eps_start                    # initialize epsilon
-#     savenumber = 0
-#     for i_episode in range(1, n_episodes+1):
-#         state = env.reset()
-#         score = 0
-#         for t in range(max_t):
-#             action = agent.act(state, eps)
-#             next_state, _, done, _ = env.step(action)
-
-#             # Calculating reward has been removed
-#             raise NotImplementedError
-
-#             agent.step(state, action, reward, next_state, done)
-#             state = next_state
-#             score += reward
-#             if done:
-#                 break
-#         scores_window.append(score)       # save most recent score
-#         scores.append(score)              # save most recent score
-#         eps = max(eps_end, eps_decay*eps) # decrease epsilon
-#         print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_window)))
-#         if i_episode % 100 == 0:
-#             savename = "data/dqn_" + str(savenumber) + ".pth"
-#             print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_window)))
-#             torch.save(agent.qnetwork_local.state_dict(), savename)
-#             savenumber += 1
-#     return scores
-
-# if __name__ == "__main__":
-#     env = gym.make("LunarLander-v2")
-#     env.seed(0)
-#     agent = Agent(state_size=8, action_size=4, seed=0)
-#     train(agent)
