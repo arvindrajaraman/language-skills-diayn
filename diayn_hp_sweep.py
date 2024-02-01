@@ -33,7 +33,6 @@ sweep_config = {
         "action_size": {"values": [4]},
         "skill_size": {"values": [5]},
         "buffer_size": {"values": [10000]},
-        "seed": {"values": [42]},
     }
 }
 
@@ -50,9 +49,6 @@ def train():
 
     # Initialize environment and agent
     env = gym.make(config["env_name"])
-    env.seed(config["seed"])
-    env.observation_space.seed(config["seed"])
-    env.action_space.seed(config["seed"])
     agent = Agent(config=config, conv=False)
 
     eps = config["eps_start"]
