@@ -26,20 +26,18 @@ class Agent():
         """
         self.config = config
         self.conv = conv
-        random.seed(config["seed"])
-        torch.manual_seed(config["seed"])
 
         # Q-Network
         if conv:
-            self.qnetwork_local = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["seed"]).to(device)
-            self.qnetwork_target = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["seed"]).to(device)
+            self.qnetwork_local = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"]).to(device)
+            self.qnetwork_target = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"]).to(device)
         else:
-            self.qnetwork_local = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["seed"]).to(device)
-            self.qnetwork_target = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["seed"]).to(device)
+            self.qnetwork_local = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"]).to(device)
+            self.qnetwork_target = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"]).to(device)
         self.qnetwork_optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=config["policy_lr"])
 
         # Replay memory
-        self.memory = ReplayBuffer(config["action_size"], config["skill_size"], config["buffer_size"], config["batch_size"], config["seed"])
+        self.memory = ReplayBuffer(config["action_size"], config["skill_size"], config["buffer_size"], config["batch_size"])
         # Initialize time step (for updating every UPDATE_EVERY steps)
         self.t_step = 0
 
@@ -47,7 +45,7 @@ class Agent():
         if conv:
             raise NotImplementedError
         else:
-            self.discriminator = SkillDiscriminatorNetwork(config["state_size"], config["skill_size"], config["seed"]).to(device)
+            self.discriminator = SkillDiscriminatorNetwork(config["state_size"], config["skill_size"]).to(device)
             self.discriminator.train()
             self.discriminator_criterion = nn.CrossEntropyLoss()
             self.discriminator_optimizer = optim.SGD(self.discriminator.parameters(), lr=config["discrim_lr"], momentum=config["discrim_momentum"])
@@ -187,21 +185,19 @@ class Agent():
 class ReplayBuffer:
     """Fixed-size buffer to store experience tuples."""
 
-    def __init__(self, action_size, skill_size, buffer_size, batch_size, seed):
+    def __init__(self, action_size, skill_size, buffer_size, batch_size):
         """Initialize a ReplayBuffer object.
         Params
         ======
             action_size (int): dimension of each action
             buffer_size (int): maximum size of buffer
             batch_size (int): size of each training batch
-            seed (int): random seed
         """
         self.action_size = action_size
         self.skill_size = skill_size
         self.memory = deque(maxlen=buffer_size)
         self.batch_size = batch_size
         self.experience = namedtuple("Experience", field_names=["state", "action", "skill_idx", "next_state", "done"])
-        self.seed = random.seed(seed)
 
     def add(self, state, action, skill_idx, next_state, done):
         """Add a new experience to memory."""

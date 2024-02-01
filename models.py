@@ -7,18 +7,16 @@ from model_utils import ResidualBlock, make_residual_layer
 class QNetwork(nn.Module):
     """Actor (Policy) Model."""
 
-    def __init__(self, state_size, action_size, seed, fc1_units=512, fc2_units=512):
+    def __init__(self, state_size, action_size, fc1_units=512, fc2_units=512):
         """Initialize parameters and build model.
         Params
         ======
             state_size (int): Dimension of each state
             action_size (int): Dimension of each action
-            seed (int): Random seed
             fc1_units (int): Number of nodes in first hidden layer
             fc2_units (int): Number of nodes in second hidden layer
         """
         super(QNetwork, self).__init__()
-        self.seed = torch.manual_seed(seed)
         self.state_size = state_size
         self.action_size = action_size
 
@@ -33,9 +31,8 @@ class QNetwork(nn.Module):
         return self.fc3(x)
     
 class SkillDiscriminatorNetwork(nn.Module):
-    def __init__(self, state_size, skill_size, seed, fc1_units=512, fc2_units=512):
+    def __init__(self, state_size, skill_size, fc1_units=512, fc2_units=512):
         super(SkillDiscriminatorNetwork, self).__init__()
-        self.seed = torch.manual_seed(seed)
         self.state_size = state_size
         self.skill_size = skill_size
         self.fc1 = nn.Linear(state_size, fc1_units)
@@ -51,9 +48,8 @@ class SkillDiscriminatorNetwork(nn.Module):
         return F.softmax(self.fc3(x), dim=1)
     
 class SkillConvDiscriminatorNetwork(nn.Module):
-    def __init__(self, state_shape, skill_size, seed, fc1_units=512, fc2_units=512):
+    def __init__(self, state_shape, skill_size, fc1_units=512, fc2_units=512):
         super(SkillConvDiscriminatorNetwork, self).__init__()
-        self.seed = torch.manual_seed(seed)
         self.height, self.width, self.n_channels = state_shape
         assert self.height == self.width, "Code is not optimized for non-square images. You may comment this assertion out."
         self.skill_size = skill_size
@@ -97,19 +93,17 @@ class SkillConvDiscriminatorNetwork(nn.Module):
 class QSkillNetwork(nn.Module):
     """Actor (Policy) Model with skill input."""
 
-    def __init__(self, state_size, action_size, skill_size, seed, fc1_units=512, fc2_units=512):
+    def __init__(self, state_size, action_size, skill_size, fc1_units=512, fc2_units=512):
         """Initialize parameters and build model.
         Params
         ======
             state_size (int): Dimension of each state
             action_size (int): Dimension of each action
             skill_size (int): Dimension of skill
-            seed (int): Random seed
             fc1_units (int): Number of nodes in first hidden layer
             fc2_units (int): Number of nodes in second hidden layer
         """
         super(QSkillNetwork, self).__init__()
-        self.seed = torch.manual_seed(seed)
         self.state_size = state_size
         self.action_size = action_size
         self.skill_size = skill_size
@@ -130,18 +124,16 @@ class QSkillNetwork(nn.Module):
 class QConvSkillNetwork(nn.Module):
     """Actor (Policy) Model."""
 
-    def __init__(self, state_shape, action_size, skill_size, seed, fc1_units=512, fc2_units=512):
+    def __init__(self, state_shape, action_size, skill_size, fc1_units=512, fc2_units=512):
         """Initialize parameters and build model.
         Params
         ======
             state_shape (int): tuple of state_shape (height, width, n_channels)
             action_size (int): Dimension of each action
-            seed (int): Random seed
             fc1_units (int): Number of nodes in first hidden layer
             fc2_units (int): Number of nodes in second hidden layer
         """
         super(QConvSkillNetwork, self).__init__()
-        self.seed = torch.manual_seed(seed)
         self.height, self.width, self.n_channels = state_shape
         assert self.height == self.width, "Code is not optimized for non-square images. You may comment this assertion out."
         self.action_size = action_size
