@@ -18,12 +18,13 @@ sweep_config = {
         "eps_start": {"values": [1.0, 0.75, 0.5, 0.25, 0.01]},
         "eps_end": {"values": [0.5, 0.25, 0.01]},
         "eps_decay": {"values": [0.9995, 0.995, 0.95, 0.9]},
-        "discrim_lr": {"distribution": "log_uniform", "log_uniform_values": {"min": -5, "max": -2}},
-        "policy_lr": {"distribution": "log_uniform", "log_uniform_values": {"min": -5, "max": -2}},
-        "gamma": {"distribution": "log_uniform", "log_uniform_values": {"min": -1, "max": 0}},
-        "tau": {"values": [1e-3, 1e-2, 1e-4]},
+        "discrim_lr": {"values": [1e-5, 1e-4, 1e-3, 1e-2]},
+        "policy_lr": {"values": [1e-5, 1e-4, 1e-3, 1e-2]},
+        "gamma": {"values": [0.7, 0.9, 0.95, 0.99, 0.999, 1.0]},
+        "tau": {"values": [1e-4, 1e-3, 1e-2]},
         "update_every": {"values": [1, 2, 4, 8, 16, 32]},
         "discrim_momentum": {"values": [0.9, 0.95, 0.99]},
+        "batch_size": {"values": [32, 64, 512]},
 
         "env_name": {"values": ["LunarLander-v2"]},
         "episodes": {"values": [5000]},
@@ -32,7 +33,6 @@ sweep_config = {
         "action_size": {"values": [4]},
         "skill_size": {"values": [5]},
         "buffer_size": {"values": [10000]},
-        "batch_size": {"values": [64]},
         "seed": {"values": [42]},
     }
 }
