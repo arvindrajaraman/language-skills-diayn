@@ -142,7 +142,7 @@ class Agent():
             "q_values": Q_expected.mean().item(),
             "target_values": Q_targets.mean().item(),
             "grad_norm": total_norm,
-            "rewards": rewards.mean().item(),
+            "reward_skill": rewards.mean().item(),
         }
     
     def update_discriminator(self, experiences):

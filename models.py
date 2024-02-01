@@ -39,13 +39,15 @@ class SkillDiscriminatorNetwork(nn.Module):
         self.state_size = state_size
         self.skill_size = skill_size
         self.fc1 = nn.Linear(state_size, fc1_units)
+        self.dropout1 = nn.Dropout(p=0.2)
         self.fc2 = nn.Linear(fc1_units, fc2_units)
+        self.dropout2 = nn.Dropout(p=0.2)
         self.fc3 = nn.Linear(fc2_units, skill_size)
 
     def forward(self, state):
         x = state
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        x = self.dropout1(F.gelu(self.fc1(x)))
+        x = self.dropout2(F.gelu(self.fc2(x)))
         return F.softmax(self.fc3(x), dim=1)
     
 class SkillConvDiscriminatorNetwork(nn.Module):
@@ -113,14 +115,16 @@ class QSkillNetwork(nn.Module):
         self.skill_size = skill_size
 
         self.fc1 = nn.Linear(state_size + skill_size, fc1_units)
+        self.dropout1 = nn.Dropout(p=0.2)
         self.fc2 = nn.Linear(fc1_units, fc2_units)
+        self.dropout2 = nn.Dropout(p=0.2)
         self.fc3 = nn.Linear(fc2_units, action_size)
 
     def forward(self, state, skill):
         """Build a network that maps state -> action values."""
         inp = torch.cat((state, skill), dim=1)
-        x = F.relu(self.fc1(inp))
-        x = F.relu(self.fc2(x))
+        x = self.dropout1(F.gelu(self.fc1(inp)))
+        x = self.dropout2(F.gelu(self.fc2(x)))
         return self.fc3(x)
     
 class QConvSkillNetwork(nn.Module):
