@@ -102,7 +102,7 @@ class Agent():
         # Calculate rewards using current discriminator
         skill_preds = self.discriminator.forward(next_states)
         selected_probs = torch.gather(skill_preds, 1, skill_idxs)
-        rewards = torch.log(selected_probs) - math.log(1/self.config["skill_size"])
+        rewards = torch.log(selected_probs + 1e-5) - math.log(1/self.config["skill_size"])
 
         # Get max predicted Q values (for next states) from target model
         Q_targets_next = self.qnetwork_target(next_states, skills).detach().max(1)[0].unsqueeze(1)
