@@ -1,5 +1,4 @@
 import os
-# os.environ['PYOPENGL_PLATFORM'] = 'egl'
 
 from datetime import datetime
 import random
@@ -39,7 +38,7 @@ config = {
 def generate_test_video(agent, skill_idx, iter):
     test_env = gym.make(config["env_name"])
     test_env.seed(config["seed"] + 1)
-    # test_env = RecordVideo(test_env, f'./data/{run_name}/iter{iter}_skill{skill_idx}')
+    test_env = RecordVideo(test_env, f'./data/{run_name}/iter{iter}_skill{skill_idx}')
 
     obs = test_env.reset()
     for _ in range(config["max_steps_per_episode"]):
