@@ -157,6 +157,8 @@ class Agent():
         skill_idx_preds = torch.argmax(skill_preds, dim=1, keepdim=True)
         acc = torch.sum(skill_idxs == skill_idx_preds) / skill_idxs.shape[0]
 
+        ent = -torch.sum(skill_preds * torch.log(skill_preds + 1e-10), dim=1).mean()
+
         total_norm = 0.0
         for p in self.discriminator.parameters():
             param_norm = p.grad.data.norm(2)
@@ -166,6 +168,7 @@ class Agent():
         return {
             "discrim_loss": loss.item(),
             "discrim_acc": acc.item(),
+            "discrim_ent": ent.item(),
             "discrim_grad_norm": total_norm,
         }
 
