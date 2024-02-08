@@ -25,33 +25,11 @@ config = {
     "gamma": 0.7,
     "max_steps_per_episode": 300,
     "policy_lr": 1e-5,
-    "seed": 42,
     "skill_size": 5,
     "state_size": 8,
     "tau": 0.0001,       # for soft update of target parameters
     "update_every": 1,
 }
-
-
-def generate_test_video(agent, skill_idx, iter):
-    # test_env = gym.make(config["env_name"])
-    # test_env.seed(config["seed"] + 1)
-    # # test_env = RecordVideo(test_env, f'./data/{run_name}/iter{iter}_skill{skill_idx}')
-
-    # obs = test_env.reset()
-    # for _ in range(config["max_steps_per_episode"]):
-    #     action = agent.act(obs, skill_idx, eps=0.)
-    #     # test_env.capture_frame()
-    #     next_obs, _, done, _ = test_env.step(action)
-    #     if done:
-    #         break
-
-    #     test_env.render(mode="rgb_array")
-
-    #     obs = next_obs
-
-    # test_env.close()
-    pass
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 run_name = '{}_{}'.format(config["env_name"], int(datetime.now().timestamp()))
@@ -67,9 +45,6 @@ wandb.config = config
 
 # Initialize environment and agent
 env = gym.make(config["env_name"])
-env.seed(config["seed"])
-env.observation_space.seed(config["seed"])
-env.action_space.seed(config["seed"])
 agent = Agent(config=config, conv=False)
 
 eps = config["eps_start"]

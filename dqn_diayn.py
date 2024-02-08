@@ -50,6 +50,18 @@ class Agent():
             self.discriminator_criterion = nn.CrossEntropyLoss()
             self.discriminator_optimizer = optim.SGD(self.discriminator.parameters(), lr=config["discrim_lr"], momentum=config["discrim_momentum"])
 
+    def init_qnetwork_local_from_path(self, path):
+        self.qnetwork_local.load_state_dict(torch.load(path))
+        self.qnetwork_local.eval()
+
+    def init_qnetwork_target_from_path(self, path):
+        self.qnetwork_target.load_state_dict(torch.load(path))
+        self.qnetwork_target.eval()
+
+    def init_discriminator_from_path(self, path):
+        self.discriminator.load_state_dict(torch.load(path))
+        self.discriminator.eval()
+
     def step(self, state, action, skill_idx, next_state, done):
         # Save experience in replay memory
         self.memory.add(state, action, skill_idx, next_state, done)
@@ -157,7 +169,7 @@ class Agent():
         skill_idx_preds = torch.argmax(skill_preds, dim=1, keepdim=True)
         acc = torch.sum(skill_idxs == skill_idx_preds) / skill_idxs.shape[0]
 
-        ent = -torch.sum(skill_preds * torch.log(skill_preds + 1e-10), dim=1).mean()
+        ent = -torch.sum(skill_preds * torch.log(skill_preds + 1e-10) / math.log(self.config["skill_size"]), dim=1).mean()
 
         total_norm = 0.0
         for p in self.discriminator.parameters():
