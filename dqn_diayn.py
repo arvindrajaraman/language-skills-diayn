@@ -51,15 +51,15 @@ class Agent():
             self.discriminator_optimizer = optim.SGD(self.discriminator.parameters(), lr=config["discrim_lr"], momentum=config["discrim_momentum"])
 
     def init_qnetwork_local_from_path(self, path):
-        self.qnetwork_local.load_state_dict(torch.load(path))
+        self.qnetwork_local.load_state_dict(torch.load(path, map_location=torch.device(device)))
         self.qnetwork_local.eval()
 
     def init_qnetwork_target_from_path(self, path):
-        self.qnetwork_target.load_state_dict(torch.load(path))
+        self.qnetwork_target.load_state_dict(torch.load(path, map_location=torch.device(device)))
         self.qnetwork_target.eval()
 
     def init_discriminator_from_path(self, path):
-        self.discriminator.load_state_dict(torch.load(path))
+        self.discriminator.load_state_dict(torch.load(path, map_location=torch.device(device)))
         self.discriminator.eval()
 
     def step(self, state, action, skill_idx, next_state, done):
