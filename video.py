@@ -1,5 +1,6 @@
 import argparse
 import os
+import shutil
 
 from datetime import datetime
 import random
@@ -9,30 +10,22 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 import wandb
-wandb.login()
 
 from dqn_diayn import Agent
 
 from gym.wrappers import RecordVideo
 
 config = {
-    # "action_size": 4,
-    # "batch_size": 128,
-    # "buffer_size": 10000,
-    # "discrim_lr": 0.01,
-    # "discrim_momentum": 0.99,
+    "action_size": 4,
+    "batch_size": 128,
+    "buffer_size": 10000,
+    "discrim_lr": 0.01,
+    "discrim_momentum": 0.99,
     "env_name": "LunarLander-v2",
-    # "episodes": 5000,
-    # "eps_decay": 0.9995,
-    # "eps_end": 0.01,
-    # "eps_start": 1.0,
-    # "gamma": 0.7,
     "max_steps_per_episode": 300,
-    # "policy_lr": 1e-5,
-    # "skill_size": 5,
-    # "state_size": 8,
-    # "tau": 0.0001,       # for soft update of target parameters
-    # "update_every": 1,
+    "policy_lr": 1e-5,
+    "skill_size": 5,
+    "state_size": 8,
 }
 
 parser = argparse.ArgumentParser()
@@ -61,7 +54,7 @@ for i in range(0, NUM_VIDEOS * VIDEO_FREQ, VIDEO_FREQ):
     for skill_idx in range(NUM_SKILLS):
         print(f'Visualizing video for iter {i}, skill {skill_idx}')
         env = gym.make(config["env_name"])
-        env = RecordVideo(env, f'skill{skill_idx}_iter{iter}.mp4')
+        env = RecordVideo(env, os.path.join(run_dir, f'iter{i}_skill{skill_idx}'))
 
         obs = env.reset()
         for _ in range(config["max_steps_per_episode"]):
