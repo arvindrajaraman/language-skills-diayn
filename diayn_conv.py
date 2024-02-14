@@ -1,150 +1,72 @@
 from datetime import datetime
-import math
+import os
 import random
 
 import gym
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
 from tqdm import tqdm
 import wandb
+wandb.login()
 
-from dqn_diayn import Agent
-from models import SkillConvDiscriminatorNetwork
+from dqn import Agent
 
-import text_crafter
-
-ENV_NAME = "CrafterReward-v1"
-EPOCHS = 5000
-SKILL_NUM = 5
-MAX_STEPS_PER_EPISODE = 100
-EPS_START = 1.0
-EPS_END = 0.01
-EPS_DECAY = 0.995
-DISCRIMINATOR_LR = 1e-4
-
-SEED = 0
-STATE_SIZE = (64, 64, 3)
-ACTION_SIZE = 27
+config = {
+    "action_size": 27,
+    "batch_size": 128,
+    "buffer_size": 10000,
+    "discrim_lr": 1e-4,
+    "discrim_momentum": 0.99,
+    "env_name": "CrafterReward-v1",
+    "episodes": 5000,
+    "eps_decay": 0.995,
+    "eps_end": 0.01,
+    "eps_start": 1.0,
+    "gamma": 0.7,
+    "max_steps_per_episode": 300,
+    "policy_lr": 1e-5,
+    "skill_size": 5,
+    "state_size": (64, 64, 3),
+    "tau": 0.0001,       # for soft update of target parameters
+    "update_every": 1,
+}
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-run_name = '{}_{}'.format(ENV_NAME, int(datetime.now().timestamp()))
-
-def skill_1he(skill_num):
-    z = torch.zeros(SKILL_NUM).to(device)
-    z[skill_num] = 1.0
-    return z
-
-def generate_test_video(agent, skill_num, skill, iter):
-    test_env = gym.make(ENV_NAME)
-    test_env.seed(SEED + 1)
-    test_env = text_crafter.Recorder(test_env, f'./data/{run_name}/iter{iter}_skill{skill_num}')
-
-    agent.set_curr_skill(skill)
-
-    state, _ = test_env.reset()
-    for _ in range(MAX_STEPS_PER_EPISODE):
-        action = agent.act(state['obs'], eps=0.)
-        # action = test_env.action_space.sample()
-        print(action)
-        
-        next_state, _, done, _ = test_env.step(action)
-        if done:
-            break
-
-        state = next_state
-
-    test_env._video_save()
+run_name = '{}_{}'.format(config["env_name"], int(datetime.now().timestamp()))
+os.makedirs(f'./data/{run_name}')
 
 # Initialize wandb
 run = wandb.init(
     project="language-skills",
-    entity="arvind6902"
+    entity="arvind6902",
+    name=run_name,
 )
-wandb.config = {
-    "epochs": EPOCHS,
-    "skill_num": SKILL_NUM,
-    "max_steps_per_episode": MAX_STEPS_PER_EPISODE,
-    "eps_start": EPS_START,
-    "eps_end": EPS_END,
-    "eps_decay": EPS_DECAY,
-    "discriminator_lr": DISCRIMINATOR_LR
-}
+wandb.config = config
 
 # Initialize environment and agent
-env = gym.make(ENV_NAME)
-env.seed(SEED)
-agent = Agent(
-    state_size=STATE_SIZE,
-    action_size=ACTION_SIZE,
-    skill_size=SKILL_NUM,
-    conv=True,
-    seed=SEED
-)
+env = gym.make(config["env_name"])
+agent = Agent(config=config, conv=True)
 
-# Initialize the discriminator
-discriminator = SkillConvDiscriminatorNetwork(
-    state_shape=STATE_SIZE,
-    skill_size=SKILL_NUM,
-    seed=SEED
-)
-discriminator.to(device)
-discriminator.train()
-discriminator_criterion = nn.CrossEntropyLoss()
-discriminator_optimizer = optim.SGD(discriminator.parameters(), lr=DISCRIMINATOR_LR, momentum=0.9)
+eps = config["eps_start"]
+for episode in tqdm(range(config["episodes"])):  
+    # Sample skill and initial state
+    skill_idx = random.randint(0, config["skill_size"] - 1)
+    obs = env.reset()
 
-eps = EPS_START
-for epoch in tqdm(range(EPOCHS)):
-    if epoch % 100 == 0:
-        print('Saving videos...')
-        for i in tqdm(range(SKILL_NUM)):
-            generate_test_video(agent, i, skill_1he(i), epoch)
-    
-    # Sample a random skill
-    skill_num = random.randint(0, SKILL_NUM - 1)
-    print('Skill:', skill_num)
-    z = skill_1he(skill_num)
-    agent.set_curr_skill(z)
+    for t in range(config["max_steps_per_episode"]):
+        action = agent.act(obs, skill_idx, eps)
+        next_obs, reward, done, _ = env.step(action)
+        next_obs = torch.tensor(next_obs).to(device).float()
+        stats = agent.step(obs, action, skill_idx, next_obs, done)  # Update policy
+        stats["reward_ground_truth"] = reward
+        stats["eps"] = eps
+        wandb.log(stats)
 
-    # Sample an initial state
-    state, _ = env.reset()
-
-    for t in range(MAX_STEPS_PER_EPISODE):
-        discriminator_optimizer.zero_grad()
-        discriminator.train()
-
-        action = agent.act(state['obs'], eps=eps)
-        next_state, _, done, _ = env.step(action)
-        next_obs = torch.tensor(next_state['obs']).to(device).float()
-
-        skill_pred = discriminator.forward(next_obs)
-        skill_reward = math.log(skill_pred[skill_num]) - math.log(1/SKILL_NUM)
-        
-        agent.step(state['obs'], action, skill_reward, next_obs, done)  # Update policy
-        if agent.t_step == 0:
-            loss = discriminator_criterion(z, skill_pred)
-            loss.backward()
-            print('Discrim Loss: {}, Reward: {}'.format(loss.item(), skill_reward))
-            discriminator_optimizer.step()
-            wandb.log({
-                "discrim_loss": loss.item(),
-                "reward": skill_reward,
-                "discrim_loss_skill_{}".format(skill_num): loss.item(),
-                "reward_skill_{}".format(skill_num): skill_reward,
-                "eps": eps
-            })
-
+        obs = next_obs.cpu().detach().numpy()
         if done:
             break
 
-        state = next_state
-
-    # Decay epsilon (induce more exploitation)
-    eps = max(EPS_END, eps * EPS_DECAY)
-
-
-# Questions:
-# Should we vary epsilon?
-# Get rid of replay buffer?
-# Only update discriminator/policy every N steps?
+    eps = max(eps * config["eps_decay"], config["eps_end"])
+    if episode % 500 == 0:
+        torch.save(agent.qnetwork_local.state_dict(), f'./data/{run_name}/qnetwork_local_iter{episode}.pth')
+        torch.save(agent.qnetwork_target.state_dict(), f'./data/{run_name}/qnetwork_target_iter{episode}.pth')
+        torch.save(agent.discriminator.state_dict(), f'./data/{run_name}/discriminator_iter{episode}.pth')

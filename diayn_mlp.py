@@ -1,6 +1,5 @@
-import os
-
 from datetime import datetime
+import os
 import random
 
 import gym
@@ -9,7 +8,7 @@ from tqdm import tqdm
 import wandb
 wandb.login()
 
-from dqn_diayn import Agent
+from dqn import Agent
 
 config = {
     "action_size": 4,
@@ -25,7 +24,7 @@ config = {
     "gamma": 0.7,
     "max_steps_per_episode": 300,
     "policy_lr": 1e-5,
-    "skill_size": 5,
+    "skill_size": 2,
     "state_size": 8,
     "tau": 0.0001,       # for soft update of target parameters
     "update_every": 1,

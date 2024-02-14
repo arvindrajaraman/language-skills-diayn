@@ -9,7 +9,7 @@ from tqdm import tqdm
 import wandb
 wandb.login()
 
-from dqn_diayn import Agent
+from dqn import Agent
 
 sweep_config = {
     "method": "bayes",
@@ -31,7 +31,7 @@ sweep_config = {
         "max_steps_per_episode": {"values": [300]},
         "state_size": {"values": [8]},
         "action_size": {"values": [4]},
-        "skill_size": {"values": [5]},
+        "skill_size": {"values": [2]},
         "buffer_size": {"values": [10000]}
     }
 }
