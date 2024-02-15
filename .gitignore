@@ -1,6 +1,8 @@
 # Custom for this project
 wandb/
 data/
+state_captioner_model.pt
+transition_captioner_model.pt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

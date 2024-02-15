@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from models import QSkillNetwork, QConvSkillNetwork, SkillDiscriminatorNetwork
+from models import QSkillNetwork, QConvSkillNetwork, SkillDiscriminatorNetwork, SkillConvDiscriminatorNetwork
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # device = "cpu"
@@ -34,6 +34,8 @@ class Agent():
         else:
             self.qnetwork_local = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"]).to(device)
             self.qnetwork_target = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"]).to(device)
+        self.qnetwork_local.train()
+        self.qnetwork_target.train()
         self.qnetwork_optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=config["policy_lr"])
 
         # Replay memory
@@ -43,12 +45,12 @@ class Agent():
 
         # Setup discriminator
         if conv:
-            raise NotImplementedError
+            self.discriminator = SkillConvDiscriminatorNetwork(config["state_size"], config["skill_size"]).to(device)
         else:
             self.discriminator = SkillDiscriminatorNetwork(config["state_size"], config["skill_size"]).to(device)
-            self.discriminator.train()
-            self.discriminator_criterion = nn.CrossEntropyLoss()
-            self.discriminator_optimizer = optim.SGD(self.discriminator.parameters(), lr=config["discrim_lr"], momentum=config["discrim_momentum"])
+        self.discriminator.train()
+        self.discriminator_criterion = nn.CrossEntropyLoss()
+        self.discriminator_optimizer = optim.SGD(self.discriminator.parameters(), lr=config["discrim_lr"], momentum=config["discrim_momentum"])
 
     def init_qnetwork_local_from_path(self, path):
         self.qnetwork_local.load_state_dict(torch.load(path, map_location=torch.device(device)))
@@ -223,29 +225,13 @@ class ReplayBuffer:
         """Randomly sample a batch of experiences from memory."""
         experiences = random.sample(self.memory, k=min(self.batch_size * self.skill_size, len(self.memory)))
 
-        states = torch.from_numpy(np.vstack([e.state for e in experiences if e is not None])).float().to(device)
-        actions = torch.from_numpy(np.vstack([e.action for e in experiences if e is not None])).long().to(device)
-        skill_idxs = torch.from_numpy(np.vstack([e.skill_idx for e in experiences if e is not None])).long().to(device)
-        next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences if e is not None])).float().to(device)
-        dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(device)
+        states = torch.from_numpy(np.stack([e.state for e in experiences if e is not None], axis=0)).float().to(device)
+        actions = torch.from_numpy(np.stack([e.action for e in experiences if e is not None], axis=0)).long().to(device).view(-1, 1)
+        skill_idxs = torch.from_numpy(np.stack([e.skill_idx for e in experiences if e is not None], axis=0)).long().to(device).view(-1, 1)
+        next_states = torch.from_numpy(np.stack([e.next_state for e in experiences if e is not None], axis=0)).float().to(device)
+        dones = torch.from_numpy(np.stack([e.done for e in experiences if e is not None], axis=0).astype(np.uint8)).float().to(device).view(-1, 1)
 
         return (states, actions, skill_idxs, next_states, dones)
-
-    def sample_for_skill(self, skill_idx):
-        """Randomly sample a batch of experiences from memory for a specific skill."""
-        experiences = random.sample(self.memory, k=min(self.batch_size * self.skill_size, len(self.memory)))
-        experiences = [e for e in experiences if e is not None and e.skill_idx == skill_idx]
-        if len(experiences) == 0:
-            return None, None, None, None, None
-
-        states = torch.from_numpy(np.vstack([e.state for e in experiences if e is not None])).float().to(device)
-        actions = torch.from_numpy(np.vstack([e.action for e in experiences if e is not None])).long().to(device)
-        skill_idxs = torch.from_numpy(np.vstack([e.skill_idx for e in experiences if e is not None])).long().to(device)
-        next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences if e is not None])).float().to(device)
-        dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(device)
-
-        return (states, actions, skill_idxs, next_states, dones)
-
 
     def __len__(self):
         """Return the current size of internal memory."""
