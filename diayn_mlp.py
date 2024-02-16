@@ -28,10 +28,11 @@ config = {
     "state_size": 8,
     "tau": 0.001,       # for soft update of target parameters
     "update_every": 1,
+    "exp_type": "mlp",
 }
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-run_name = '{}_{}'.format(config["env_name"], int(datetime.now().timestamp()))
+run_name = '{}_{}_{}_{}'.format(config["env_name"], config["exp_type"], config["skill_size"], int(datetime.now().timestamp()))
 os.makedirs(f'./data/{run_name}')
 
 # Initialize wandb
