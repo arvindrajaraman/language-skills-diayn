@@ -21,13 +21,15 @@ class QNetwork(nn.Module):
         self.action_size = action_size
 
         self.fc1 = nn.Linear(state_size, fc1_units)
+        self.dropout1 = nn.Dropout(p=0.2)
         self.fc2 = nn.Linear(fc1_units, fc2_units)
+        self.dropout2 = nn.Dropout(p=0.2)
         self.fc3 = nn.Linear(fc2_units, action_size)
 
     def forward(self, state):
         """Build a network that maps state -> action values."""
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
+        x = self.dropout1(F.gelu(self.fc1(state)))
+        x = self.dropout2(F.gelu(self.fc2(x)))
         return self.fc3(x)
     
 class SkillDiscriminatorNetwork(nn.Module):
@@ -62,7 +64,9 @@ class SkillConvDiscriminatorNetwork(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
 
         self.fc1 = nn.Linear(self.height * 8, fc1_units)
+        self.dropout1 = nn.Dropout(p=0.2)
         self.fc2 = nn.Linear(fc1_units, fc2_units)
+        self.dropout2 = nn.Dropout(p=0.2)
         self.fc3 = nn.Linear(fc2_units, skill_size)
 
     def forward(self, state):
@@ -81,8 +85,8 @@ class SkillConvDiscriminatorNetwork(nn.Module):
         x = self.avg_pool(x)
         x = x.view(x.size(0), -1)
 
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        x = self.dropout1(F.gelu(self.fc1(x)))
+        x = self.dropout2(F.gelu(self.fc2(x)))
         x = F.softmax(self.fc3(x), dim=1)
 
         if state.dim() == 3:
@@ -147,7 +151,9 @@ class QConvSkillNetwork(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
 
         self.fc1 = nn.Linear((self.height * 8) + skill_size, fc1_units)
+        self.dropout1 = nn.Dropout(p=0.2)
         self.fc2 = nn.Linear(fc1_units, fc2_units)
+        self.dropout2 = nn.Dropout(p=0.2)
         self.fc3 = nn.Linear(fc2_units, action_size)
 
     def forward(self, state, skill):
@@ -168,8 +174,8 @@ class QConvSkillNetwork(nn.Module):
         x = x.view(x.size(0), -1)
 
         x = torch.cat((x, skill), dim=1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        x = self.dropout1(F.gelu(self.fc1(x)))
+        x = self.dropout2(F.gelu(self.fc2(x)))
         x = self.fc3(x)
 
         return x

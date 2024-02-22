@@ -1,6 +1,9 @@
+import argparse
 from datetime import datetime
 import os
 import random
+import yaml
+from pathlib import Path
 
 import gym
 import torch
@@ -15,27 +18,11 @@ from captioner import get_captioner
 
 import text_crafter
 
-config = {
-    "action_size": 27,
-    "batch_size": 128,
-    "buffer_size": 10000,
-    "discrim_lr": 1e-4,
-    "discrim_momentum": 0.99,
-    "env_name": "CrafterReward-v1",
-    "episodes": 5000,
-    "eps_decay": 0.995,
-    "eps_end": 0.01,
-    "eps_start": 1.0,
-    "gamma": 0.7,
-    "max_steps_per_episode": 100,
-    "policy_lr": 1e-5,
-    "skill_size": 5,
-    "state_size": 384,
-    "tau": 0.0001,       # for soft update of target parameters
-    "update_every": 10,
-    "exp_type": "lang",
-}
+parser = argparse.ArgumentParser()
+parser.add_argument('--config', '-c', type=str, required=True)
+args = parser.parse_args()
 
+config = yaml.safe_load(Path(os.path.join('config', args.config)).read_text())
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 run_name = '{}_{}_{}_{}'.format(config["env_name"], config["exp_type"], config["skill_size"], int(datetime.now().timestamp()))
 os.makedirs(f'./data/{run_name}')

@@ -29,11 +29,13 @@ class Agent():
 
         # Q-Network
         if conv:
-            self.qnetwork_local = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"]).to(device)
-            self.qnetwork_target = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"]).to(device)
+            self.qnetwork_local = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["policy_units"], config["policy_units"]).to(device)
+            self.qnetwork_target = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["policy_units"], config["policy_units"]).to(device)
         else:
-            self.qnetwork_local = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"]).to(device)
-            self.qnetwork_target = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"]).to(device)
+            self.qnetwork_local = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["policy_units"], config["policy_units"]).to(device)
+            self.qnetwork_target = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["policy_units"], config["policy_units"]).to(device)
+        self.qnetwork_local = nn.DataParallel(self.qnetwork_local)
+        self.qnetwork_target = nn.DataParallel(self.qnetwork_target)
         self.qnetwork_local.train()
         self.qnetwork_target.train()
         self.qnetwork_optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=config["policy_lr"])
@@ -45,9 +47,10 @@ class Agent():
 
         # Setup discriminator
         if conv:
-            self.discriminator = SkillConvDiscriminatorNetwork(config["state_size"], config["skill_size"]).to(device)
+            self.discriminator = SkillConvDiscriminatorNetwork(config["state_size"], config["skill_size"], config["discrim_units"], config["discrim_units"]).to(device)
         else:
-            self.discriminator = SkillDiscriminatorNetwork(config["state_size"], config["skill_size"]).to(device)
+            self.discriminator = SkillDiscriminatorNetwork(config["state_size"], config["skill_size"], config["discrim_units"], config["discrim_units"]).to(device)
+        self.discriminator = nn.DataParallel(self.discriminator)
         self.discriminator.train()
         self.discriminator_criterion = nn.CrossEntropyLoss()
         self.discriminator_optimizer = optim.SGD(self.discriminator.parameters(), lr=config["discrim_lr"], momentum=config["discrim_momentum"])

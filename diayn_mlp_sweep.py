@@ -32,7 +32,7 @@ sweep_config = {
         "state_size": {"values": [8]},
         "action_size": {"values": [4]},
         "skill_size": {"values": [2]},
-        "buffer_size": {"values": [10000]}
+        "buffer_size": {"values": [10000]},
     }
 }
 

@@ -38,6 +38,7 @@ run_dir = f'./data/{run_name}'
 NUM_VIDEOS = 10
 VIDEO_FREQ = 500
 NUM_SKILLS = 5
+ROLLOUTS_PER = 5
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 agent = Agent(config=config, conv=False)
@@ -52,17 +53,18 @@ for i in range(0, NUM_VIDEOS * VIDEO_FREQ, VIDEO_FREQ):
     agent.init_discriminator_from_path(discriminator_path)
 
     for skill_idx in range(NUM_SKILLS):
-        print(f'Visualizing video for iter {i}, skill {skill_idx}')
-        env = gym.make(config["env_name"])
-        env = RecordVideo(env, os.path.join(run_dir, f'iter{i}_skill{skill_idx}'))
+        for rollout_idx in range(ROLLOUTS_PER):
+            print(f'Visualizing video for iter {i}, skill {skill_idx}, rollout_idx {rollout_idx}')
+            env = gym.make(config["env_name"])
+            env = RecordVideo(env, os.path.join(run_dir, f'iter{i}_skill{skill_idx}_rollout_{rollout_idx}'))
 
-        obs = env.reset()
-        for _ in range(config["max_steps_per_episode"]):
-            action = agent.act(obs, skill_idx, eps=0.)
-            next_obs, _, done, _ = env.step(action)
-            if done:
-                break
+            obs = env.reset()
+            for _ in range(config["max_steps_per_episode"]):
+                action = agent.act(obs, skill_idx, eps=0.)
+                next_obs, _, done, _ = env.step(action)
+                if done:
+                    break
 
-            obs = next_obs
-        
-        env.close()
+                obs = next_obs
+            
+            env.close()

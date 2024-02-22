@@ -1,6 +1,8 @@
 import cv2
 from PIL import Image, ImageFont, ImageDraw
 import numpy as np
+import torch
+import wandb
 
 def get_frame(env, action):
     img = env.render((512, 512))
@@ -12,7 +14,7 @@ def get_frame(env, action):
     img = np.asarray(img)
     return img
 
-def record_rollouts(agent, env, config):
+def record_rollouts(agent, env, config, device):
     agent.qnetwork_local.eval()
     stats = dict()
     for skill_idx in range(0, config["skill_size"]):

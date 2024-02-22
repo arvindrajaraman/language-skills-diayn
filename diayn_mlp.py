@@ -1,6 +1,9 @@
+import argparse
 from datetime import datetime
 import os
 import random
+import yaml
+from pathlib import Path
 
 import gym
 import torch
@@ -10,27 +13,11 @@ wandb.login()
 
 from dqn import Agent
 
-config = {
-    "action_size": 4,
-    "batch_size": 64,
-    "buffer_size": 10000,
-    "discrim_lr": 0.01,
-    "discrim_momentum": 0.95,
-    "env_name": "LunarLander-v2",
-    "episodes": 5000,
-    "eps_decay": 0.9995,
-    "eps_end": 0.01,
-    "eps_start": 1.0,
-    "gamma": 0.99,
-    "max_steps_per_episode": 300,
-    "policy_lr": 0.01,
-    "skill_size": 2,
-    "state_size": 8,
-    "tau": 0.001,       # for soft update of target parameters
-    "update_every": 1,
-    "exp_type": "mlp",
-}
+parser = argparse.ArgumentParser()
+parser.add_argument('--config', '-c', type=str, required=True)
+args = parser.parse_args()
 
+config = yaml.safe_load(Path(os.path.join('config', args.config)).read_text())
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 run_name = '{}_{}_{}_{}'.format(config["env_name"], config["exp_type"], config["skill_size"], int(datetime.now().timestamp()))
 os.makedirs(f'./data/{run_name}')
