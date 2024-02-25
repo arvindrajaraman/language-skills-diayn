@@ -3,6 +3,7 @@ wandb/
 data/
 state_captioner_model.pt
 transition_captioner_model.pt
+slurm/*.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

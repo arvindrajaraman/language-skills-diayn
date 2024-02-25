@@ -4,14 +4,15 @@ import os
 import random
 import yaml
 from pathlib import Path
-
 import gym
 import torch
 from tqdm import tqdm
 import wandb
-wandb.login()
-
+from dotenv import load_dotenv
 from dqn import Agent
+
+load_dotenv()
+wandb.login(key=os.getenv("WANDB_API_KEY"))
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', '-c', type=str, required=True)
