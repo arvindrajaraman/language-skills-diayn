@@ -6,8 +6,11 @@ import random
 import gym
 import torch
 from tqdm import tqdm
+from dotenv import load_dotenv
 import wandb
-wandb.login()
+
+load_dotenv()
+wandb.login(key=os.getenv("WANDB_API_KEY"))
 
 from dqn import Agent
 

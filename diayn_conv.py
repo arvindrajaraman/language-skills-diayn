@@ -9,8 +9,11 @@ import gym
 from gym.wrappers import RecordVideo
 import torch
 from tqdm import tqdm
+from dotenv import load_dotenv
 import wandb
-wandb.login()
+
+load_dotenv()
+wandb.login(key=os.getenv("WANDB_API_KEY"))
 
 from dqn import Agent
 from crafter_vis import record_rollouts
