@@ -10,7 +10,7 @@ import torch
 from sentence_transformers import SentenceTransformer, util as st_utils
 from text_crafter import lm
 import fasteners
-from captioner import get_captioner
+from captioner_crafter import get_captioner
 
 class CrafterGoalWrapper:
     """ Goal wrapper for baselines. Used for baselines and single-goal eval. """

@@ -2,6 +2,7 @@ import numpy as np
 import random
 from collections import namedtuple, deque
 import math
+import os
 
 import torch
 import torch.nn as nn
@@ -9,6 +10,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from models import QSkillNetwork, QConvSkillNetwork, SkillDiscriminatorNetwork, SkillConvDiscriminatorNetwork
+from metrics_ll import train_mutual_info_score
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # device = "cpu"
@@ -16,16 +18,27 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class Agent():
     """Interacts with and learns from the environment."""
 
-    def __init__(self, config: dict, conv: bool):
+    def __init__(self, config: dict, conv: bool, embedding_fn: callable = lambda x: x):
         """Initialize an Agent object.
 
         Params
         ======
             config (dict): configurations
             conv (bool): whether to use a convolutional discriminator and policy (i.e. if your observations are images)
+            embedding_fn (bool): if using embeddings of observations for the discriminator, this is the embedding function
         """
+        if "seed" not in config:
+            config["seed"] = np.random.randint(0, 2**31 - 1)
+        random.seed(config["seed"])
+        os.environ['PYTHONHASHSEED'] = str(config["seed"])
+        np.random.seed(config["seed"])
+        torch.manual_seed(config["seed"])
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
         self.config = config
         self.conv = conv
+        self.embedding_fn = embedding_fn
 
         # Q-Network
         if conv:
@@ -45,6 +58,14 @@ class Agent():
         # Initialize time step (for updating every UPDATE_EVERY steps)
         self.t_step = 0
 
+        # Visitation distribution
+        self.max_x = self.max_y = 1.5
+        self.min_x = self.min_y = -1.5
+        self.num_bins_x = self.num_bins_y = 50
+        self.bin_size_x = (self.max_x - self.min_x) / self.num_bins_x
+        self.bin_size_y = (self.max_y - self.min_y) / self.num_bins_y
+        self.visitations = np.zeros((self.config["skill_size"] + 1, self.num_bins_x, self.num_bins_y))
+
         # Setup discriminator
         if conv:
             self.discriminator = SkillConvDiscriminatorNetwork(config["state_size"], config["skill_size"], config["discrim_units"], config["discrim_units"]).to(device)
@@ -54,6 +75,9 @@ class Agent():
         self.discriminator.train()
         self.discriminator_criterion = nn.CrossEntropyLoss()
         self.discriminator_optimizer = optim.SGD(self.discriminator.parameters(), lr=config["discrim_lr"], momentum=config["discrim_momentum"])
+
+        # Goal tracking
+        self.last_n_goals = deque(maxlen=100)
 
     def init_qnetwork_local_from_path(self, path):
         self.qnetwork_local.load_state_dict(torch.load(path, map_location=torch.device(device)))
@@ -68,8 +92,25 @@ class Agent():
         self.discriminator.eval()
 
     def step(self, state, action, skill_idx, next_state, done):
+        stats = {}
+
         # Save experience in replay memory
-        self.memory.add(state, action, skill_idx, next_state, done)
+        state_embedding = self.embedding_fn(state)
+        next_state_embedding = self.embedding_fn(next_state)
+        self.memory.add(state, state_embedding, action, skill_idx, next_state, next_state_embedding, done)
+
+        if done and (self.config["skill_size"] == 3 and self.config["env_name"] == "LunarLander-v2"):
+            self.last_n_goals.append((next_state, skill_idx))
+            stats["mutual_info_train"] = train_mutual_info_score(self.config, self.last_n_goals)
+
+        # Record visitation
+        x_index = int((state[0] - self.min_x) / self.bin_size_x)
+        x_index = min(max(x_index, 0), self.num_bins_x - 1)
+        y_index = int((state[1] - self.min_y) / self.bin_size_y)
+        y_index = min(max(y_index, 0), self.num_bins_y - 1)
+
+        self.visitations[skill_idx][y_index][x_index] += 1
+        self.visitations[-1][y_index][x_index] += 1
 
         # Learn every UPDATE_EVERY time steps.
         self.t_step = (self.t_step + 1) % self.config["update_every"]
@@ -77,11 +118,11 @@ class Agent():
             # If enough samples are available in memory, get random subset and learn
             if len(self.memory) >= self.config["batch_size"]:
                 experiences = self.memory.sample()
-                stats = self.learn(experiences, self.config["gamma"])
+                stats.update(self.learn(experiences, self.config["gamma"]))
                 stats.update(self.update_discriminator(experiences))
                 return stats
             
-        return {}
+        return stats
 
     def act(self, state, skill_idx, eps):
         """Returns actions for given state as per current policy.
@@ -113,7 +154,7 @@ class Agent():
             experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples
             gamma (float): discount factor
         """
-        states, actions, skill_idxs, next_states, dones = experiences
+        states, _, actions, skill_idxs, next_states, _, dones = experiences
         skills = F.one_hot(skill_idxs.view(-1), self.config["skill_size"]).float().to(device)
         
         # Calculate rewards using current discriminator
@@ -163,9 +204,9 @@ class Agent():
     def update_discriminator(self, experiences):
         self.discriminator_optimizer.zero_grad()
 
-        _, _, skill_idxs, next_states, _ = experiences
+        _, _, _, skill_idxs, _, next_state_embeddings, _ = experiences
         skills = F.one_hot(skill_idxs.view(-1), self.config["skill_size"]).float().to(device)
-        skill_preds = self.discriminator.forward(next_states)
+        skill_preds = self.discriminator.forward(next_state_embeddings)
 
         loss = self.discriminator_criterion(skills, skill_preds)
         loss.backward()
@@ -217,11 +258,11 @@ class ReplayBuffer:
         self.skill_size = skill_size
         self.memory = deque(maxlen=buffer_size)
         self.batch_size = batch_size
-        self.experience = namedtuple("Experience", field_names=["state", "action", "skill_idx", "next_state", "done"])
+        self.experience = namedtuple("Experience", field_names=["state", "state_embedding", "action", "skill_idx", "next_state", "next_state_embedding", "done"])
 
-    def add(self, state, action, skill_idx, next_state, done):
+    def add(self, state, state_embedding, action, skill_idx, next_state, next_state_embedding, done):
         """Add a new experience to memory."""
-        e = self.experience(state, action, skill_idx, next_state.cpu().detach().numpy(), done)
+        e = self.experience(state, state_embedding, action, skill_idx, next_state.cpu().detach().numpy(), next_state_embedding.cpu().detach().numpy(), done)
         self.memory.append(e)
 
     def sample(self):
@@ -229,12 +270,14 @@ class ReplayBuffer:
         experiences = random.sample(self.memory, k=min(self.batch_size * self.skill_size, len(self.memory)))
 
         states = torch.from_numpy(np.stack([e.state for e in experiences if e is not None], axis=0)).float().to(device)
+        state_embeddings = torch.from_numpy(np.stack([e.state_embedding for e in experiences if e is not None], axis=0)).float().to(device)
         actions = torch.from_numpy(np.stack([e.action for e in experiences if e is not None], axis=0)).long().to(device).view(-1, 1)
         skill_idxs = torch.from_numpy(np.stack([e.skill_idx for e in experiences if e is not None], axis=0)).long().to(device).view(-1, 1)
         next_states = torch.from_numpy(np.stack([e.next_state for e in experiences if e is not None], axis=0)).float().to(device)
+        next_state_embeddings = torch.from_numpy(np.stack([e.next_state_embedding for e in experiences if e is not None], axis=0)).float().to(device)
         dones = torch.from_numpy(np.stack([e.done for e in experiences if e is not None], axis=0).astype(np.uint8)).float().to(device).view(-1, 1)
 
-        return (states, actions, skill_idxs, next_states, dones)
+        return (states, state_embeddings, actions, skill_idxs, next_states, next_state_embeddings, dones)
 
     def __len__(self):
         """Return the current size of internal memory."""

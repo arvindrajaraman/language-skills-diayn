@@ -4,19 +4,16 @@ import os
 import random
 import yaml
 from pathlib import Path
-
 import gym
 import torch
 from tqdm import tqdm
 # import wandb
-# wandb.login()
-from sentence_transformers import SentenceTransformer
-
+from dotenv import load_dotenv
 from dqn import Agent
-from crafter_vis import record_rollouts
-from captioner import get_captioner
+from captioner_ll import naive_captioner
 
-import text_crafter
+load_dotenv()
+# wandb.login(key=os.getenv("WANDB_API_KEY"))
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', '-c', type=str, required=True)
@@ -24,7 +21,7 @@ args = parser.parse_args()
 
 config = yaml.safe_load(Path(os.path.join('config', args.config)).read_text())
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-run_name = '{}_{}_{}_{}'.format(config["env_name"], config["exp_type"], config["skill_size"], int(datetime.now().timestamp()))
+run_name = '{}_{}_{}_{}_{}'.format(config["env_name"], config["exp_type"], config["skill_size"], config["embedding_type"], int(datetime.now().timestamp()))
 os.makedirs(f'./data/{run_name}')
 
 # # Initialize wandb
@@ -37,40 +34,22 @@ os.makedirs(f'./data/{run_name}')
 
 # Initialize environment and agent
 env = gym.make(config["env_name"])
-agent = Agent(config=config, conv=False)
-
-_, caption_state, _ = get_captioner()
-caption_embedder = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+agent = Agent(config=config, conv=False, embedding_fn=naive_captioner)
 
 eps = config["eps_start"]
-for episode in tqdm(range(config["episodes"])):
-    if episode % 500 == 0:
-        record_stats = record_rollouts(agent, env, config)
-    else:
-        record_stats = None
-    
+for episode in tqdm(range(config["episodes"])):  
     # Sample skill and initial state
     skill_idx = random.randint(0, config["skill_size"] - 1)
-    obs, info = env.reset()
-    obs = obs['obs']
+    obs = env.reset()
 
     for t in range(config["max_steps_per_episode"]):
-        obs_caption = caption_state(info)
-        obs_embedding = caption_embedder.encode(obs_caption)
-
-        action = agent.act(obs_embedding, skill_idx, eps)
-        next_obs, reward, done, info = env.step(action)
-        next_obs = next_obs['obs']
+        action = agent.act(obs, skill_idx, eps)
+        next_obs, reward, done, _ = env.step(action)
         next_obs = torch.tensor(next_obs).to(device).float()
-
-        next_obs_caption = caption_state(info)
-        next_obs_embedding = caption_embedder.encode(next_obs_caption)
-
-        stats = agent.step(obs_embedding, action, skill_idx, next_obs_embedding, done)  # Update policy
+        stats = agent.step(obs, action, skill_idx, next_obs, done)  # Update policy
         stats["reward_ground_truth"] = reward
         stats["eps"] = eps
-        if record_stats is not None:
-            stats.update(record_stats)
+        stats["episode"] = episode
         # wandb.log(stats)
 
         obs = next_obs.cpu().detach().numpy()

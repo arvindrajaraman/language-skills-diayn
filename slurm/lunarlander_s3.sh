@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=lunarlander_s5
+#SBATCH --job-name=lunarlander_s3
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=1gb
 #SBATCH --gpus=1
@@ -9,4 +9,4 @@
 
 cd ..
 
-srun conda run -n diayn python diayn_mlp.py -c lunarlander_s5.yml
+srun conda run -n diayn python diayn_mlp.py -c lunarlander_s3.yml

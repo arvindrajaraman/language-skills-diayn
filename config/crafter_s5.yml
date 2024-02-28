@@ -18,3 +18,4 @@ state_size: [64, 64, 3]
 tau: 0.001
 update_every: 1
 exp_type: mlp
+embedding_type: identity

@@ -18,3 +18,4 @@ update_every: 1
 exp_type: mlp
 discrim_units: 512
 policy_units: 512
+embedding_type: identity

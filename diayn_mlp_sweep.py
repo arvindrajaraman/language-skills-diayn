@@ -67,6 +67,7 @@ def train():
             stats = agent.step(obs, action, skill_idx, next_obs, done)  # Update policy
             stats["reward_ground_truth"] = reward
             stats["eps"] = eps
+            stats["episode"] = episode
             wandb.log(stats)
 
             obs = next_obs.cpu().detach().numpy()

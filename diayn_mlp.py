@@ -10,6 +10,8 @@ from tqdm import tqdm
 import wandb
 from dotenv import load_dotenv
 from dqn import Agent
+from visualization.visitation_distribution import plot_visitations
+from metrics_ll import test_mutual_info_score
 
 load_dotenv()
 wandb.login(key=os.getenv("WANDB_API_KEY"))
@@ -20,7 +22,7 @@ args = parser.parse_args()
 
 config = yaml.safe_load(Path(os.path.join('config', args.config)).read_text())
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-run_name = '{}_{}_{}_{}'.format(config["env_name"], config["exp_type"], config["skill_size"], int(datetime.now().timestamp()))
+run_name = '{}_{}_{}_{}_{}'.format(config["env_name"], config["exp_type"], config["skill_size"], config["embedding_type"], int(datetime.now().timestamp()))
 os.makedirs(f'./data/{run_name}')
 
 # Initialize wandb
@@ -48,6 +50,13 @@ for episode in tqdm(range(config["episodes"])):
         stats = agent.step(obs, action, skill_idx, next_obs, done)  # Update policy
         stats["reward_ground_truth"] = reward
         stats["eps"] = eps
+        stats["episode"] = episode
+        if episode % 500 == 0:
+            for i in range(config["skill_size"]):
+                stats[f"visitation_skill_{i}"] = plot_visitations(agent.visitations[skill_idx], agent.x_min, agent.x_max, agent.y_min, agent.y_max, skill_idx)
+            stats["visitation_all"] = plot_visitations(agent.visitations[-1], agent.x_min, agent.x_max, agent.y_min, agent.y_max)
+        if episode % 100 == 0:
+            stats["mutual_info_test"] = test_mutual_info_score(agent, config)
         wandb.log(stats)
 
         obs = next_obs.cpu().detach().numpy()
