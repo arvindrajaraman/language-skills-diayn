@@ -148,9 +148,10 @@ class Agent():
         return action
 
     def discriminate(self, state):
+        state = torch.from_numpy(state).float().to(device).view(1, -1)
         self.discriminator.eval()
         with torch.no_grad():
-            predictions = self.discriminator(state)
+            predictions = self.discriminator(state)[0]
         self.discriminator.train()
         return predictions
 

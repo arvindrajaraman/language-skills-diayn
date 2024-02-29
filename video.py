@@ -1,43 +1,30 @@
 import argparse
 import os
 import shutil
-
 from datetime import datetime
 import random
-
 import gym
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 import wandb
-
-from dqn_diayn import Agent
-
+from dqn import Agent
 from gym.wrappers import RecordVideo
-
-config = {
-    "action_size": 4,
-    "batch_size": 128,
-    "buffer_size": 10000,
-    "discrim_lr": 0.01,
-    "discrim_momentum": 0.99,
-    "env_name": "LunarLander-v2",
-    "max_steps_per_episode": 300,
-    "policy_lr": 1e-5,
-    "skill_size": 5,
-    "state_size": 8,
-}
+import yaml
+from pathlib import Path
 
 parser = argparse.ArgumentParser()
+parser.add_argument('-c', '--config', help='Config', required=True)
 parser.add_argument('-n', '--name', help='Run name', required=True)
 args = parser.parse_args()
+
+config = yaml.safe_load(Path(os.path.join('config', args.config)).read_text())
 
 run_name = args.name
 run_dir = f'./data/{run_name}'
 
 NUM_VIDEOS = 10
 VIDEO_FREQ = 500
-NUM_SKILLS = 5
 ROLLOUTS_PER = 5
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -52,21 +39,24 @@ for i in range(0, NUM_VIDEOS * VIDEO_FREQ, VIDEO_FREQ):
     agent.init_qnetwork_target_from_path(qnetwork_target_path)
     agent.init_discriminator_from_path(discriminator_path)
 
-    for skill_idx in range(NUM_SKILLS):
+    for skill_idx in range(config["skill_size"]):
         for rollout_idx in range(ROLLOUTS_PER):
             print(f'Visualizing video for iter {i}, skill {skill_idx}, rollout_idx {rollout_idx}')
+            folder_name = f'iter{i}_skill{skill_idx}_rollout{rollout_idx}'
             env = gym.make(config["env_name"])
-            env = RecordVideo(env, os.path.join(run_dir, f'iter{i}_skill{skill_idx}_rollout_{rollout_idx}'))
+            env = RecordVideo(env, os.path.join(run_dir, 'rollouts', folder_name))
+            discriminator_probs = []
 
             obs = env.reset()
             for _ in range(config["max_steps_per_episode"]):
                 action = agent.act(obs, skill_idx, eps=0.)
                 next_obs, _, done, _ = env.step(action)
+                discriminator_probs.append(agent.discriminate(next_obs)[skill_idx].item())
                 if done:
                     break
 
                 obs = next_obs
-
-            print(agent.disccriminate(next_obs)[skill_idx])
             
             env.close()
+            with open(os.path.join(run_dir, 'rollouts', folder_name, 'discriminator_probs.txt'), 'a') as f:
+                f.write(f'{discriminator_probs}\n')
