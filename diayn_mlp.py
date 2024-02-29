@@ -6,6 +6,7 @@ import yaml
 from pathlib import Path
 import gym
 import torch
+import numpy as np
 from tqdm import tqdm
 import wandb
 from dotenv import load_dotenv
@@ -53,9 +54,11 @@ for episode in tqdm(range(config["episodes"])):
         stats["episode"] = episode
         if episode % 500 == 0:
             for i in range(config["skill_size"]):
-                stats[f"visitation_skill_{i}"] = plot_visitations(agent.visitations[skill_idx], agent.x_min, agent.x_max, agent.y_min, agent.y_max, skill_idx)
-            stats["visitation_all"] = plot_visitations(agent.visitations[-1], agent.x_min, agent.x_max, agent.y_min, agent.y_max)
-        if episode % 100 == 0:
+                stats[f"visits_s{i}"] = plot_visitations(agent.visitations[i], agent.min_x, agent.max_x, agent.min_y, agent.max_y, i)
+                stats[f"log_visits_s{i}"] = plot_visitations(agent.visitations[i], agent.min_x, agent.max_x, agent.min_y, agent.max_y, i, log=True)
+            stats["visits_all"] = plot_visitations(agent.visitations[-1], agent.min_x, agent.max_x, agent.min_y, agent.max_y)
+            stats["log_visits_all"] = plot_visitations(agent.visitations[-1], agent.min_x, agent.max_x, agent.min_y, agent.max_y, log=True)
+        if episode % 100 == 0 and episode != 0:
             stats["mutual_info_test"] = test_mutual_info_score(agent, config)
         wandb.log(stats)
 

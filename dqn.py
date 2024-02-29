@@ -147,6 +147,13 @@ class Agent():
 
         return action
 
+    def discriminate(self, state):
+        self.discriminator.eval()
+        with torch.no_grad():
+            predictions = self.discriminator(state)
+        self.discriminator.train()
+        return predictions
+
     def learn(self, experiences, gamma):
         """Update value parameters using given batch of experience tuples.
         Params

@@ -66,5 +66,7 @@ for i in range(0, NUM_VIDEOS * VIDEO_FREQ, VIDEO_FREQ):
                     break
 
                 obs = next_obs
+
+            print(agent.disccriminate(next_obs)[skill_idx])
             
             env.close()
