@@ -70,7 +70,7 @@ class Agent():
         if conv:
             self.discriminator = SkillConvDiscriminatorNetwork(config["state_size"], config["skill_size"], config["discrim_units"], config["discrim_units"]).to(device)
         else:
-            self.discriminator = SkillDiscriminatorNetwork(config["state_size"], config["skill_size"], config["discrim_units"], config["discrim_units"]).to(device)
+            self.discriminator = SkillDiscriminatorNetwork(config["embedding_size"], config["skill_size"], config["discrim_units"], config["discrim_units"]).to(device)
         self.discriminator = nn.DataParallel(self.discriminator)
         self.discriminator.train()
         self.discriminator_criterion = nn.CrossEntropyLoss()
@@ -95,9 +95,8 @@ class Agent():
         stats = {}
 
         # Save experience in replay memory
-        state_embedding = self.embedding_fn(state)
         next_state_embedding = self.embedding_fn(next_state)
-        self.memory.add(state, state_embedding, action, skill_idx, next_state, next_state_embedding, done)
+        self.memory.add(state, action, skill_idx, next_state, next_state_embedding, done)
 
         if done and (self.config["skill_size"] == 3 and self.config["env_name"] == "LunarLander-v2"):
             self.last_n_goals.append((next_state, skill_idx))
@@ -162,11 +161,11 @@ class Agent():
             experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples
             gamma (float): discount factor
         """
-        states, _, actions, skill_idxs, next_states, _, dones = experiences
+        states, actions, skill_idxs, next_states, next_state_embeddings, dones = experiences
         skills = F.one_hot(skill_idxs.view(-1), self.config["skill_size"]).float().to(device)
         
         # Calculate rewards using current discriminator
-        skill_preds = self.discriminator.forward(next_states)
+        skill_preds = self.discriminator.forward(next_state_embeddings)
         selected_probs = torch.gather(skill_preds, 1, skill_idxs)
         rewards = torch.log(selected_probs + 1e-5) - math.log(1/self.config["skill_size"])
 
@@ -212,7 +211,7 @@ class Agent():
     def update_discriminator(self, experiences):
         self.discriminator_optimizer.zero_grad()
 
-        _, _, _, skill_idxs, _, next_state_embeddings, _ = experiences
+        _, _, skill_idxs, _, next_state_embeddings, _ = experiences
         skills = F.one_hot(skill_idxs.view(-1), self.config["skill_size"]).float().to(device)
         skill_preds = self.discriminator.forward(next_state_embeddings)
 
@@ -266,11 +265,11 @@ class ReplayBuffer:
         self.skill_size = skill_size
         self.memory = deque(maxlen=buffer_size)
         self.batch_size = batch_size
-        self.experience = namedtuple("Experience", field_names=["state", "state_embedding", "action", "skill_idx", "next_state", "next_state_embedding", "done"])
+        self.experience = namedtuple("Experience", field_names=["state", "action", "skill_idx", "next_state", "next_state_embedding", "done"])
 
-    def add(self, state, state_embedding, action, skill_idx, next_state, next_state_embedding, done):
+    def add(self, state, action, skill_idx, next_state, next_state_embedding, done):
         """Add a new experience to memory."""
-        e = self.experience(state, state_embedding, action, skill_idx, next_state.cpu().detach().numpy(), next_state_embedding.cpu().detach().numpy(), done)
+        e = self.experience(state, action, skill_idx, next_state.cpu().detach().numpy(), next_state_embedding.cpu().detach().numpy(), done)
         self.memory.append(e)
 
     def sample(self):
@@ -278,14 +277,13 @@ class ReplayBuffer:
         experiences = random.sample(self.memory, k=min(self.batch_size * self.skill_size, len(self.memory)))
 
         states = torch.from_numpy(np.stack([e.state for e in experiences if e is not None], axis=0)).float().to(device)
-        state_embeddings = torch.from_numpy(np.stack([e.state_embedding for e in experiences if e is not None], axis=0)).float().to(device)
         actions = torch.from_numpy(np.stack([e.action for e in experiences if e is not None], axis=0)).long().to(device).view(-1, 1)
         skill_idxs = torch.from_numpy(np.stack([e.skill_idx for e in experiences if e is not None], axis=0)).long().to(device).view(-1, 1)
         next_states = torch.from_numpy(np.stack([e.next_state for e in experiences if e is not None], axis=0)).float().to(device)
         next_state_embeddings = torch.from_numpy(np.stack([e.next_state_embedding for e in experiences if e is not None], axis=0)).float().to(device)
         dones = torch.from_numpy(np.stack([e.done for e in experiences if e is not None], axis=0).astype(np.uint8)).float().to(device).view(-1, 1)
 
-        return (states, state_embeddings, actions, skill_idxs, next_states, next_state_embeddings, dones)
+        return (states, actions, skill_idxs, next_states, next_state_embeddings, dones)
 
     def __len__(self):
         """Return the current size of internal memory."""

@@ -1,2 +1,0 @@
-slurmstepd: error: *** STEP 144894.0 ON dqn.ist.berkeley.edu CANCELLED AT 2024-02-28T19:00:07 ***
-slurmstepd: error: *** JOB 144894 ON dqn.ist.berkeley.edu CANCELLED AT 2024-02-28T19:00:07 ***

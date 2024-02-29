@@ -33,11 +33,11 @@ class QNetwork(nn.Module):
         return self.fc3(x)
     
 class SkillDiscriminatorNetwork(nn.Module):
-    def __init__(self, state_size, skill_size, fc1_units=512, fc2_units=512):
+    def __init__(self, state_embedding_size, skill_size, fc1_units=512, fc2_units=512):
         super(SkillDiscriminatorNetwork, self).__init__()
-        self.state_size = state_size
+        self.state_embedding_size = state_embedding_size
         self.skill_size = skill_size
-        self.fc1 = nn.Linear(state_size, fc1_units)
+        self.fc1 = nn.Linear(state_embedding_size, fc1_units)
         self.dropout1 = nn.Dropout(p=0.2)
         self.fc2 = nn.Linear(fc1_units, fc2_units)
         self.dropout2 = nn.Dropout(p=0.2)

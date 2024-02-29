@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from dqn import Agent
 from visualization.visitation_distribution import plot_visitations
 from metrics_ll import test_mutual_info_score
+from captioner_ll import naive_captioner, language_captioner
 
 load_dotenv()
 wandb.login(key=os.getenv("WANDB_API_KEY"))
@@ -34,9 +35,19 @@ run = wandb.init(
 )
 wandb.config = config
 
+# Choose embedding function
+if config["embedding_type"] == "identity":
+    embedding_fn = lambda x: x
+elif config["embedding_type"] == "naive":
+    embedding_fn = naive_captioner
+elif config["embedding_type"] == "language":
+    embedding_fn = language_captioner
+else:
+    raise ValueError(f"Invalid embedding type: {config['embedding_type']}")
+
 # Initialize environment and agent
 env = gym.make(config["env_name"])
-agent = Agent(config=config, conv=False)
+agent = Agent(config=config, conv=False, embedding_fn=embedding_fn)
 
 eps = config["eps_start"]
 for episode in tqdm(range(config["episodes"])):  
@@ -58,8 +69,9 @@ for episode in tqdm(range(config["episodes"])):
                 stats[f"log_visits_s{i}"] = plot_visitations(agent.visitations[i], agent.min_x, agent.max_x, agent.min_y, agent.max_y, i, log=True)
             stats["visits_all"] = plot_visitations(agent.visitations[-1], agent.min_x, agent.max_x, agent.min_y, agent.max_y)
             stats["log_visits_all"] = plot_visitations(agent.visitations[-1], agent.min_x, agent.max_x, agent.min_y, agent.max_y, log=True)
-        if episode % 100 == 0 and episode != 0:
-            stats["mutual_info_test"] = test_mutual_info_score(agent, config)
+            agent.visitations = np.zeros((agent.config["skill_size"] + 1, agent.num_bins_x, agent.num_bins_y))
+        # if episode % 100 == 0 and episode != 0:
+        #     stats["mutual_info_test"] = test_mutual_info_score(agent, config)
         wandb.log(stats)
 
         obs = next_obs.cpu().detach().numpy()
