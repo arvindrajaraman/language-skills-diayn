@@ -16,9 +16,9 @@ def _compute_mutual_info(freq_matrix):
     return mi
 
 def _classify_goal(next_state):
-    if -1.5 <= next_state[0] <= -0.5:
+    if -1.5 <= next_state[0] <= -0.25:
         return 0
-    elif -0.5 <= next_state[0] <= 0.5:
+    elif -0.25 <= next_state[0] <= 0.25:
         return 1
     else:
         return 2

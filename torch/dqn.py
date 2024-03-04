@@ -219,6 +219,8 @@ class Agent():
         loss.backward()
         self.discriminator_optimizer.step()
 
+        print(skills, next_state_embeddings, skill_preds)
+
         skill_idx_preds = torch.argmax(skill_preds, dim=1, keepdim=True)
         acc = torch.sum(skill_idxs == skill_idx_preds) / skill_idxs.shape[0]
 

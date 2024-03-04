@@ -1,7 +1,7 @@
 action_size: 4
 batch_size: 256
 buffer_size: 10000
-discrim_lr: 0.01
+discrim_lr: 0.001
 discrim_momentum: 0.99
 env_name: LunarLander-v2
 episodes: 5000
