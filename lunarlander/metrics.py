@@ -1,5 +1,5 @@
-import numpy as np
 import gym
+import numpy as np
 
 def _compute_mutual_info(freq_matrix):
     total_freq = np.sum(freq_matrix)

@@ -214,11 +214,11 @@ class CrafterLMGoalWrapper(CrafterGoalWrapper):
         self.lm = lm_class(prompt_format=prompt_format, **lm_spec)
         self.oracle_lm = lm.SimpleOracle(prompt_format=prompt_format, **lm_spec) 
         self.use_sbert_sim = True
-        self.device = device
-        assert self.device is not None
+        'cuda' = device
+        assert 'cuda' is not None
         self.threshold = threshold
         self.embed_lm = SentenceTransformer('sentence-transformers/paraphrase-MiniLM-L3-v2')
-        self.device = torch.device(device)
+        'cuda' = torch.device(device)
         self.cache = {}
         self.suggested_actions = []
         self.all_suggested_actions = []
@@ -285,7 +285,7 @@ class CrafterLMGoalWrapper(CrafterGoalWrapper):
         if len(rewarding_actions) == 0:
             return 0, None
 
-        if self.device is None:
+        if 'cuda' is None:
             raise ValueError("Must specify device for real LM")
 
         # Cosine similarity reward
@@ -330,7 +330,7 @@ class CrafterLMGoalWrapper(CrafterGoalWrapper):
         # Encode the strings which are not in cache
         if len(strs_not_in_cache) > 0:
             start_time = time.time()
-            embeddings_not_in_cache = self.embed_lm.encode(strs_not_in_cache, convert_to_tensor=True, device=self.device)
+            embeddings_not_in_cache = self.embed_lm.encode(strs_not_in_cache, convert_to_tensor=True, device='cuda')
             self.sbert_time += time.time() - start_time
             self.unit_query_time.append(time.time() - start_time)
             self.unit_query_time = self.unit_query_time[-100:]
@@ -340,19 +340,19 @@ class CrafterLMGoalWrapper(CrafterGoalWrapper):
                 self.cache[suggestion] = embedding
             updated_cache = True
         else:
-            embeddings_not_in_cache = torch.FloatTensor([]).to(self.device)
+            embeddings_not_in_cache = torch.FloatTensor([]).to('cuda')
             updated_cache = False
 
         # Look up the embeddings of the strings which are in cache
         if len(strs_in_cache) > 0:
             start_time = time.time()
-            embeddings_in_cache = torch.stack([self.cache[suggestion] for suggestion in strs_in_cache]).to(self.device)
+            embeddings_in_cache = torch.stack([self.cache[suggestion] for suggestion in strs_in_cache]).to('cuda')
             self.cache_time += time.time() - start_time
             self.unit_cache_time.append(time.time() - start_time)
             self.unit_cache_time = self.unit_cache_time[-100:]
             assert embeddings_in_cache.shape == (len(strs_in_cache), 384) # size of sbert embeddings
         else:
-            embeddings_in_cache = torch.FloatTensor([]).to(self.device)
+            embeddings_in_cache = torch.FloatTensor([]).to('cuda')
 
         # Concatenate the embeddings of the suggestions in the cache and the suggestions not in the cache
         suggestion_embeddings = torch.cat((embeddings_in_cache, embeddings_not_in_cache), dim=0)
@@ -369,7 +369,7 @@ class CrafterLMGoalWrapper(CrafterGoalWrapper):
             return embedding, False
         else:
             start_time = time.time()
-            embedding = self.embed_lm.encode(action_name, convert_to_tensor=True, device=self.device)
+            embedding = self.embed_lm.encode(action_name, convert_to_tensor=True, device='cuda')
             self.sbert_time += time.time() - start_time
             self.unit_query_time.append(time.time() - start_time)
             self.unit_query_time = self.unit_query_time[-100:]

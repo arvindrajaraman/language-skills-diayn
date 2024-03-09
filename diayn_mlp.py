@@ -4,21 +4,18 @@ import os
 import random
 import yaml
 from pathlib import Path
-
 import gym
-from gym.wrappers import RecordVideo
 import torch
+import numpy as np
 from tqdm import tqdm
-from dotenv import load_dotenv
 import wandb
+from dotenv import load_dotenv
+from diayn import DIAYN
+from visualization.visitation_distribution import plot_visitations
+from lunarlander.captioner import naive_captioner, language_captioner
 
 load_dotenv()
 wandb.login(key=os.getenv("WANDB_API_KEY"))
-
-from dqn import Agent
-from crafter_vis import record_rollouts
-
-import text_crafter
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', '-c', type=str, required=True)
@@ -37,33 +34,38 @@ run = wandb.init(
 )
 wandb.config = config
 
+# Choose embedding function
+if config.embedding_type == "identity":
+    embedding_fn = lambda x: x
+elif config.embedding_type == "naive":
+    embedding_fn = naive_captioner
+elif config.embedding_type == "language":
+    embedding_fn = language_captioner
+else:
+    raise ValueError(f"Invalid embedding type: {config['embedding_type']}")
+
 # Initialize environment and agent
 env = gym.make(config.env_name)
-agent = Agent(config=config, conv=True)
+agent = DIAYN(config=config, embedding_fn=embedding_fn)
 
 eps = config.eps_start
-for episode in tqdm(range(config.episodes)):
-    if episode % 500 == 0:
-        record_stats = record_rollouts(agent, env, config, device)
-    else:
-        record_stats = None
-    
+for episode in tqdm(range(config.episodes)):  
     # Sample skill and initial state
     skill_idx = random.randint(0, config.skill_size - 1)
-    obs, _ = env.reset()
-    obs = obs['obs']
+    obs = env.reset()
 
     for t in range(config.max_steps_per_episode):
         action = agent.act(obs, skill_idx, eps)
         next_obs, reward, done, _ = env.step(action)
-        next_obs = next_obs['obs']
-        next_obs = torch.tensor(next_obs).to(device).float()
         stats = agent.step(obs, action, skill_idx, next_obs, done)  # Update policy
         stats["reward_ground_truth"] = reward
         stats["eps"] = eps
         stats["episode"] = episode
-        if record_stats is not None:
-            stats.update(record_stats)
+        if episode % 500 == 0:
+            for i in range(config.skill_size):
+                stats[f"log_visits_s{i}"] = plot_visitations(agent.visitations[i], agent.min_x, agent.max_x, agent.min_y, agent.max_y, i, log=True)
+            stats["log_visits_all"] = plot_visitations(agent.visitations[-1], agent.min_x, agent.max_x, agent.min_y, agent.max_y, log=True)
+            agent.visitations = np.zeros((agent.config.skill_size + 1, agent.num_bins_x, agent.num_bins_y))
         wandb.log(stats)
 
         obs = next_obs.cpu().detach().numpy()
@@ -72,6 +74,6 @@ for episode in tqdm(range(config.episodes)):
 
     eps = max(eps * config.eps_decay, config.eps_end)
     if episode % 500 == 0:
-        torch.save(agent.qnetwork_local.state_dict(), f'./data/{run_name}/qnetwork_local_iter{episode}.pth')
-        torch.save(agent.qnetwork_target.state_dict(), f'./data/{run_name}/qnetwork_target_iter{episode}.pth')
-        torch.save(agent.discriminator.state_dict(), f'./data/{run_name}/discriminator_iter{episode}.pth')
+        torch.save(agent.qlocal.state_dict(), f'./data/{run_name}/qlocal_iter{episode}.pth')
+        torch.save(agent.qtarget.state_dict(), f'./data/{run_name}/qtarget_iter{episode}.pth')
+        torch.save(agent.discrim.state_dict(), f'./data/{run_name}/discrim_iter{episode}.pth')

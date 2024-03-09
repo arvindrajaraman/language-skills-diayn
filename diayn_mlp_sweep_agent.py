@@ -12,9 +12,9 @@ import wandb
 load_dotenv()
 wandb.login(key=os.getenv("WANDB_API_KEY"))
 
-from dqn import Agent
+from diayn import DIAYN
 from visualization.visitation_distribution import plot_visitations
-from captioner_ll import naive_captioner, language_captioner
+from lunarlander.captioner import naive_captioner, language_captioner
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--sweep_id', '-s', type=str, required=True)
@@ -43,7 +43,7 @@ def train():
 
     # Initialize environment and agent
     env = gym.make(config.env_name)
-    agent = Agent(config=config, conv=False, embedding_fn=embedding_fn)
+    agent = DIAYN(config=config, embedding_fn=embedding_fn)
 
     eps = config.eps_start
     for episode in tqdm(range(config.episodes)):  

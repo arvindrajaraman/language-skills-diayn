@@ -19,10 +19,12 @@ parameters:
     values: [0.7, 0.9, 0.95, 0.99, 0.999, 1.0]
   tau:
     values: [0.01, 0.001, 0.0001]
-  update_every:
+  discrim_update_freq:
     values: [1, 2, 4, 8, 16, 32]
-  discrim_momentum:
-    values: [0.9, 0.95, 0.99]
+  qlocal_update_freq:
+    values: [1, 2, 4, 8, 16, 32]
+  qtarget_update_freq:
+    values: [1, 2, 4, 8, 16, 32]
   batch_size:
     values: [32, 64, 128, 256, 512]
   discrim_units:

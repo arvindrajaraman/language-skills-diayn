@@ -1,6 +1,6 @@
 import cv2
-from PIL import Image, ImageFont, ImageDraw
 import numpy as np
+from PIL import Image, ImageFont, ImageDraw
 import torch
 import wandb
 
@@ -15,7 +15,7 @@ def get_frame(env, action):
     return img
 
 def record_rollouts(agent, env, config, device):
-    agent.qnetwork_local.eval()
+    agent.qlocal.eval()
     stats = dict()
     for skill_idx in range(0, config.skill_size):
         print(f'Visualizing video for skill {skill_idx}')
@@ -36,5 +36,5 @@ def record_rollouts(agent, env, config, device):
         frames = np.stack(frames) # THWC
         frames = np.moveaxis(frames, [3], [1])
         stats[f'skill_{skill_idx}_video'] = wandb.Video(frames)
-    agent.qnetwork_local.train()
+    agent.qlocal.train()
     return stats

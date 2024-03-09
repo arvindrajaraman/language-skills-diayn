@@ -1,17 +1,18 @@
+import os
+import pathlib
 import time
+
+import clip  # git+https://github.com/openai/CLIP.git
+import numpy as np
 import PIL
 import skimage.io as io
 import torch
-import numpy as np
 import torch.nn.functional as nnf
-import clip  # git+https://github.com/openai/CLIP.git
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
+
 import gym
 import text_crafter
 from text_crafter import constants
-import pathlib
-import os
-import time
 
 path_to_transition_weights = pathlib.Path(os.path.dirname(os.path.realpath(__file__))) / 'transition_captioner_model.pt'
 path_to_state_weights = pathlib.Path(os.path.dirname(os.path.realpath(__file__))) / 'state_captioner_model.pt'
@@ -24,19 +25,19 @@ objects = ['arrow', 'coal', 'cow', 'diamond', 'furnace', 'grass', 'iron', 'iron_
            'stone_pickaxe', 'stone_sword', 'table', 'tree', 'water', 'wood_pickaxe', 'wood_sword', 'zombie']
 class Predictor():
     def __init__(self, prefix_size_transition=1024+56, prefix_size_state=512+56, transition_weight_path=path_to_transition_weights, state_weight_path=path_to_state_weights):
-        self.device = torch.device("cuda")
-        self.clip_model, self.preprocess = clip.load("ViT-B/32", device=self.device, jit=False)
+        'cuda' = torch.device("cuda")
+        self.clip_model, self.preprocess = clip.load("ViT-B/32", device='cuda', jit=False)
         self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         self.prefix_length = 10
         self.transition_model = ClipCaptionModel(self.prefix_length, prefix_size=prefix_size_transition)
         self.transition_model.load_state_dict(torch.load(transition_weight_path, map_location=torch.device("cpu")))
         self.transition_model = self.transition_model.eval()
-        self.transition_model = self.transition_model.to(self.device)
+        self.transition_model = self.transition_model.to('cuda')
 
         self.state_model = ClipCaptionModel(self.prefix_length, prefix_size=prefix_size_state)
         self.state_model.load_state_dict(torch.load(state_weight_path, map_location=torch.device("cpu")))
         self.state_model = self.state_model.eval()
-        self.state_model = self.state_model.to(self.device)
+        self.state_model = self.state_model.to('cuda')
 
         self.time_dict_transition = {
             'make_pil': 0,
@@ -64,13 +65,13 @@ class Predictor():
         pil_image = PIL.Image.fromarray(image)
         self.time_dict_state['make_pil'] += time.time() - start_time
         start_time = time.time()
-        image = self.preprocess(pil_image).unsqueeze(0).to(self.device)
-        semantic_emb_pre = torch.tensor(semantic_emb_pre).to(self.device, dtype=torch.float32).unsqueeze(0)
+        image = self.preprocess(pil_image).unsqueeze(0).to('cuda')
+        semantic_emb_pre = torch.tensor(semantic_emb_pre).to('cuda', dtype=torch.float32).unsqueeze(0)
         self.time_dict_state['preprocess'] += time.time() - start_time
         start_time = time.time()
 
         with torch.no_grad():
-            prefix = self.clip_model.encode_image(image).to(self.device, dtype=torch.float32)
+            prefix = self.clip_model.encode_image(image).to('cuda', dtype=torch.float32)
             self.time_dict_state['encode_image'] += time.time() - start_time
             start_time = time.time()
             prefix = torch.cat([prefix, semantic_emb_pre], dim=1)
@@ -90,17 +91,17 @@ class Predictor():
         pil_next_image = PIL.Image.fromarray(next_image)
         self.time_dict_transition['make_pil'] += time.time() - start_time
         start_time = time.time()
-        image = self.preprocess(pil_image).unsqueeze(0).to(self.device)
-        next_image = self.preprocess(pil_next_image).unsqueeze(0).to(self.device)
-        semantic_emb_pre = torch.tensor(semantic_emb_pre).to(self.device, dtype=torch.float32)
-        semantic_emb_post = torch.tensor(semantic_emb_post).to(self.device, dtype=torch.float32)
+        image = self.preprocess(pil_image).unsqueeze(0).to('cuda')
+        next_image = self.preprocess(pil_next_image).unsqueeze(0).to('cuda')
+        semantic_emb_pre = torch.tensor(semantic_emb_pre).to('cuda', dtype=torch.float32)
+        semantic_emb_post = torch.tensor(semantic_emb_post).to('cuda', dtype=torch.float32)
         semantic_emb_diff = (semantic_emb_post - semantic_emb_pre).unsqueeze(0)
         self.time_dict_transition['preprocess'] += time.time() - start_time
         start_time = time.time()
 
         with torch.no_grad():
-            prefix = self.clip_model.encode_image(image).to(self.device, dtype=torch.float32)
-            prefix_next = self.clip_model.encode_image(next_image).to(self.device, dtype=torch.float32)
+            prefix = self.clip_model.encode_image(image).to('cuda', dtype=torch.float32)
+            prefix_next = self.clip_model.encode_image(next_image).to('cuda', dtype=torch.float32)
             self.time_dict_transition['encode_image'] += time.time() - start_time
             start_time = time.time()
             prefix = torch.cat([prefix, prefix_next, semantic_emb_diff], dim=1)
