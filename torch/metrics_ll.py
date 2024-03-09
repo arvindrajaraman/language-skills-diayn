@@ -24,7 +24,7 @@ def _classify_goal(next_state):
         return 2
 
 def train_mutual_info_score(config, last_n_goals):
-    assert config["skill_size"] == 3 and config["env_name"] == "LunarLander-v2", "Not the right settings for this metric"
+    assert config.skill_size == 3 and config.env_name == "LunarLander-v2", "Not the right settings for this metric"
 
     freq_matrix = np.zeros((3, 3))
     for next_state, skill_idx in last_n_goals:
@@ -35,14 +35,14 @@ def train_mutual_info_score(config, last_n_goals):
 
 
 def test_mutual_info_score(agent, config, rollouts_per_skill=20):
-    assert config["skill_size"] == 3 and config["env_name"] == "LunarLander-v2", "Not the right settings for this metric"
+    assert config.skill_size == 3 and config.env_name == "LunarLander-v2", "Not the right settings for this metric"
 
     freq_matrix = np.zeros((3, 3))
-    env = gym.make(config["env_name"])
+    env = gym.make(config.env_name)
     for skill_idx in [0, 1, 2]:
         for _ in range(rollouts_per_skill):
             obs = env.reset()
-            for _ in range(config["max_steps_per_episode"]):
+            for _ in range(config.max_steps_per_episode):
                 action = agent.act(obs, skill_idx, eps=0.)
                 next_obs, _, done, _ = env.step(action)
                 if done:

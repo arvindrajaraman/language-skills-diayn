@@ -32,9 +32,9 @@ class QNetwork(nn.Module):
         x = self.dropout2(F.gelu(self.fc2(x)))
         return self.fc3(x)
     
-class SkillDiscriminatorNetwork(nn.Module):
+class Discriminator(nn.Module):
     def __init__(self, state_embedding_size, skill_size, fc1_units=512, fc2_units=512):
-        super(SkillDiscriminatorNetwork, self).__init__()
+        super(Discriminator, self).__init__()
         self.state_embedding_size = state_embedding_size
         self.skill_size = skill_size
         self.fc1 = nn.Linear(state_embedding_size, fc1_units)
@@ -49,9 +49,9 @@ class SkillDiscriminatorNetwork(nn.Module):
         x = self.dropout2(F.gelu(self.fc2(x)))
         return F.softmax(self.fc3(x), dim=1)
     
-class SkillConvDiscriminatorNetwork(nn.Module):
+class DiscriminatorConv(nn.Module):
     def __init__(self, state_shape, skill_size, fc1_units=512, fc2_units=512):
-        super(SkillConvDiscriminatorNetwork, self).__init__()
+        super(DiscriminatorConv, self).__init__()
         self.height, self.width, self.n_channels = state_shape
         assert self.height == self.width, "Code is not optimized for non-square images. You may comment this assertion out."
         self.skill_size = skill_size
@@ -94,7 +94,7 @@ class SkillConvDiscriminatorNetwork(nn.Module):
 
         return x
 
-class QSkillNetwork(nn.Module):
+class QNet(nn.Module):
     """Actor (Policy) Model with skill input."""
 
     def __init__(self, state_size, action_size, skill_size, fc1_units=512, fc2_units=512):
@@ -107,7 +107,7 @@ class QSkillNetwork(nn.Module):
             fc1_units (int): Number of nodes in first hidden layer
             fc2_units (int): Number of nodes in second hidden layer
         """
-        super(QSkillNetwork, self).__init__()
+        super(QNet, self).__init__()
         self.state_size = state_size
         self.action_size = action_size
         self.skill_size = skill_size
@@ -125,7 +125,7 @@ class QSkillNetwork(nn.Module):
         x = self.dropout2(F.gelu(self.fc2(x)))
         return self.fc3(x)
     
-class QConvSkillNetwork(nn.Module):
+class QNetConv(nn.Module):
     """Actor (Policy) Model."""
 
     def __init__(self, state_shape, action_size, skill_size, fc1_units=512, fc2_units=512):
@@ -137,7 +137,7 @@ class QConvSkillNetwork(nn.Module):
             fc1_units (int): Number of nodes in first hidden layer
             fc2_units (int): Number of nodes in second hidden layer
         """
-        super(QConvSkillNetwork, self).__init__()
+        super(QNetConv, self).__init__()
         self.height, self.width, self.n_channels = state_shape
         assert self.height == self.width, "Code is not optimized for non-square images. You may comment this assertion out."
         self.action_size = action_size

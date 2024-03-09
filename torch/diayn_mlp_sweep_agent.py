@@ -28,30 +28,30 @@ def train():
     config = wandb.config
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    run_name = '{}_{}'.format(config["env_name"], int(datetime.now().timestamp()))
+    run_name = '{}_{}'.format(config.env_name, int(datetime.now().timestamp()))
     os.makedirs(f'./data/{run_name}')
 
     # Choose embedding function
-    if config["embedding_type"] == "identity":
+    if config.embedding_type == "identity":
         embedding_fn = lambda x: x
-    elif config["embedding_type"] == "naive":
+    elif config.embedding_type == "naive":
         embedding_fn = naive_captioner
-    elif config["embedding_type"] == "language":
+    elif config.embedding_type == "language":
         embedding_fn = language_captioner
     else:
         raise ValueError(f"Invalid embedding type: {config['embedding_type']}")
 
     # Initialize environment and agent
-    env = gym.make(config["env_name"])
+    env = gym.make(config.env_name)
     agent = Agent(config=config, conv=False, embedding_fn=embedding_fn)
 
-    eps = config["eps_start"]
-    for episode in tqdm(range(config["episodes"])):  
+    eps = config.eps_start
+    for episode in tqdm(range(config.episodes)):  
         # Sample skill and initial state
-        skill_idx = random.randint(0, config["skill_size"] - 1)
+        skill_idx = random.randint(0, config.skill_size - 1)
         obs = env.reset()
 
-        for t in range(config["max_steps_per_episode"]):
+        for t in range(config.max_steps_per_episode):
             action = agent.act(obs, skill_idx, eps)
             next_obs, reward, done, _ = env.step(action)
             next_obs = torch.tensor(next_obs).to(device).float()
@@ -60,12 +60,12 @@ def train():
             stats["eps"] = eps
             stats["episode"] = episode
             if episode % 500 == 0:
-                for i in range(config["skill_size"]):
+                for i in range(config.skill_size):
                     stats[f"visits_s{i}"] = plot_visitations(agent.visitations[i], agent.min_x, agent.max_x, agent.min_y, agent.max_y, i)
                     stats[f"log_visits_s{i}"] = plot_visitations(agent.visitations[i], agent.min_x, agent.max_x, agent.min_y, agent.max_y, i, log=True)
                 stats["visits_all"] = plot_visitations(agent.visitations[-1], agent.min_x, agent.max_x, agent.min_y, agent.max_y)
                 stats["log_visits_all"] = plot_visitations(agent.visitations[-1], agent.min_x, agent.max_x, agent.min_y, agent.max_y, log=True)
-                agent.visitations = np.zeros((agent.config["skill_size"] + 1, agent.num_bins_x, agent.num_bins_y))
+                agent.visitations = np.zeros((agent.config.skill_size + 1, agent.num_bins_x, agent.num_bins_y))
             # if episode % 100 == 0 and episode != 0:
             #     stats["mutual_info_test"] = test_mutual_info_score(agent, config)
             wandb.log(stats)
@@ -74,7 +74,7 @@ def train():
             if done:
                 break
 
-        eps = max(eps * config["eps_decay"], config["eps_end"])
+        eps = max(eps * config.eps_decay, config.eps_end)
 
 
 wandb.agent(sweep_id=args.sweep_id, function=train)

@@ -24,7 +24,7 @@ args = parser.parse_args()
 
 config = yaml.safe_load(Path(os.path.join('config', args.config)).read_text())
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-run_name = '{}_{}_{}_{}_{}'.format(config["env_name"], config["exp_type"], config["skill_size"], config["embedding_type"], int(datetime.now().timestamp()))
+run_name = '{}_{}_{}_{}_{}'.format(config.env_name, config.exp_type, config.skill_size, config.embedding_type, int(datetime.now().timestamp()))
 os.makedirs(f'./data/{run_name}')
 
 # # Initialize wandb
@@ -36,25 +36,25 @@ os.makedirs(f'./data/{run_name}')
 # wandb.config = config
 
 # Initialize environment and agent
-env = gym.make(config["env_name"])
+env = gym.make(config.env_name)
 agent = Agent(config=config, conv=False)
 
 _, caption_state, _ = get_captioner()
 caption_embedder = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
 
-eps = config["eps_start"]
-for episode in tqdm(range(config["episodes"])):
+eps = config.eps_start
+for episode in tqdm(range(config.episodes)):
     if episode % 500 == 0:
         record_stats = record_rollouts(agent, env, config)
     else:
         record_stats = None
     
     # Sample skill and initial state
-    skill_idx = random.randint(0, config["skill_size"] - 1)
+    skill_idx = random.randint(0, config.skill_size - 1)
     obs, info = env.reset()
     obs = obs['obs']
 
-    for t in range(config["max_steps_per_episode"]):
+    for t in range(config.max_steps_per_episode):
         obs_caption = caption_state(info)
         obs_embedding = caption_embedder.encode(obs_caption)
 
@@ -78,7 +78,7 @@ for episode in tqdm(range(config["episodes"])):
         if done:
             break
 
-    eps = max(eps * config["eps_decay"], config["eps_end"])
+    eps = max(eps * config.eps_decay, config.eps_end)
     if episode % 500 == 0:
         torch.save(agent.qnetwork_local.state_dict(), f'./data/{run_name}/qnetwork_local_iter{episode}.pth')
         torch.save(agent.qnetwork_target.state_dict(), f'./data/{run_name}/qnetwork_target_iter{episode}.pth')

@@ -39,16 +39,16 @@ for i in range(0, NUM_VIDEOS * VIDEO_FREQ, VIDEO_FREQ):
     agent.init_qnetwork_target_from_path(qnetwork_target_path)
     agent.init_discriminator_from_path(discriminator_path)
 
-    for skill_idx in range(config["skill_size"]):
+    for skill_idx in range(config.skill_size):
         for rollout_idx in range(ROLLOUTS_PER):
             print(f'Visualizing video for iter {i}, skill {skill_idx}, rollout_idx {rollout_idx}')
             folder_name = f'iter{i}_skill{skill_idx}_rollout{rollout_idx}'
-            env = gym.make(config["env_name"])
+            env = gym.make(config.env_name)
             env = RecordVideo(env, os.path.join(run_dir, 'rollouts', folder_name))
             discriminator_probs = []
 
             obs = env.reset()
-            for _ in range(config["max_steps_per_episode"]):
+            for _ in range(config.max_steps_per_episode):
                 action = agent.act(obs, skill_idx, eps=0.)
                 next_obs, _, done, _ = env.step(action)
                 discriminator_probs.append(agent.discriminate(next_obs)[skill_idx].item())

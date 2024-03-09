@@ -29,21 +29,21 @@ def train():
     config = wandb.config
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    run_name = '{}_{}'.format(config["env_name"], int(datetime.now().timestamp()))
+    run_name = '{}_{}'.format(config.env_name, int(datetime.now().timestamp()))
     os.makedirs(f'./data/{run_name}')
 
     # Initialize environment and agent
-    env = gym.make(config["env_name"])
+    env = gym.make(config.env_name)
     agent = Agent(config=config, conv=True)
 
-    eps = config["eps_start"]
-    for episode in tqdm(range(config["episodes"])):
+    eps = config.eps_start
+    for episode in tqdm(range(config.episodes)):
         # Sample skill and initial state
-        skill_idx = random.randint(0, config["skill_size"] - 1)
+        skill_idx = random.randint(0, config.skill_size - 1)
         obs, _ = env.reset()
         obs = obs['obs']
 
-        for t in range(config["max_steps_per_episode"]):
+        for t in range(config.max_steps_per_episode):
             action = agent.act(obs, skill_idx, eps)
             next_obs, reward, done, _ = env.step(action)
             next_obs = next_obs['obs']
@@ -58,6 +58,6 @@ def train():
             if done:
                 break
 
-        eps = max(eps * config["eps_decay"], config["eps_end"])
+        eps = max(eps * config.eps_decay, config.eps_end)
 
 wandb.agent(sweep_id=args.sweep_id, function=train)

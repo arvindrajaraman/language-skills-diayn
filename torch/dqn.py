@@ -8,8 +8,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from ml_collections import ConfigDict
 
-from models import QSkillNetwork, QConvSkillNetwork, SkillDiscriminatorNetwork, SkillConvDiscriminatorNetwork
+from models import QNet, QNetConv, Discriminator, DiscriminatorConv
 from metrics_ll import train_mutual_info_score
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -18,7 +19,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class Agent():
     """Interacts with and learns from the environment."""
 
-    def __init__(self, config: dict, conv: bool, embedding_fn: callable = lambda x: x):
+    def __init__(self, config: ConfigDict, conv: bool, embedding_fn: callable = lambda x: x):
         """Initialize an Agent object.
 
         Params
@@ -28,11 +29,11 @@ class Agent():
             embedding_fn (bool): if using embeddings of observations for the discriminator, this is the embedding function
         """
         if "seed" not in config:
-            config["seed"] = np.random.randint(0, 2**31 - 1)
-        random.seed(config["seed"])
-        os.environ['PYTHONHASHSEED'] = str(config["seed"])
-        np.random.seed(config["seed"])
-        torch.manual_seed(config["seed"])
+            config.seed = np.random.randint(0, 2**31 - 1)
+        random.seed(config.seed)
+        os.environ['PYTHONHASHSEED'] = str(config.seed)
+        np.random.seed(config.seed)
+        torch.manual_seed(config.seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
@@ -42,19 +43,19 @@ class Agent():
 
         # Q-Network
         if conv:
-            self.qnetwork_local = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["policy_units"], config["policy_units"]).to(device)
-            self.qnetwork_target = QConvSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["policy_units"], config["policy_units"]).to(device)
+            self.qnetwork_local = QNetConv(config.state_size, config.action_size, config.skill_size, config.policy_units, config.policy_units).to(device)
+            self.qnetwork_target = QNetConv(config.state_size, config.action_size, config.skill_size, config.policy_units, config.policy_units).to(device)
         else:
-            self.qnetwork_local = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["policy_units"], config["policy_units"]).to(device)
-            self.qnetwork_target = QSkillNetwork(config["state_size"], config["action_size"], config["skill_size"], config["policy_units"], config["policy_units"]).to(device)
+            self.qnetwork_local = QNet(config.state_size, config.action_size, config.skill_size, config.policy_units, config.policy_units).to(device)
+            self.qnetwork_target = QNet(config.state_size, config.action_size, config.skill_size, config.policy_units, config.policy_units).to(device)
         self.qnetwork_local = nn.DataParallel(self.qnetwork_local)
         self.qnetwork_target = nn.DataParallel(self.qnetwork_target)
         self.qnetwork_local.train()
         self.qnetwork_target.train()
-        self.qnetwork_optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=config["policy_lr"])
+        self.qnetwork_optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=config.policy_lr)
 
         # Replay memory
-        self.memory = ReplayBuffer(config["action_size"], config["skill_size"], config["buffer_size"], config["batch_size"])
+        self.memory = ReplayBuffer(config.action_size, config.skill_size, config.buffer_size, config.batch_size)
         # Initialize time step (for updating every UPDATE_EVERY steps)
         self.t_step = 0
 
@@ -64,17 +65,17 @@ class Agent():
         self.num_bins_x = self.num_bins_y = 50
         self.bin_size_x = (self.max_x - self.min_x) / self.num_bins_x
         self.bin_size_y = (self.max_y - self.min_y) / self.num_bins_y
-        self.visitations = np.zeros((self.config["skill_size"] + 1, self.num_bins_x, self.num_bins_y))
+        self.visitations = np.zeros((self.config.skill_size + 1, self.num_bins_x, self.num_bins_y))
 
         # Setup discriminator
         if conv:
-            self.discriminator = SkillConvDiscriminatorNetwork(config["state_size"], config["skill_size"], config["discrim_units"], config["discrim_units"]).to(device)
+            self.discriminator = DiscriminatorConv(config.state_size, config.skill_size, config.discrim_units, config.discrim_units).to(device)
         else:
-            self.discriminator = SkillDiscriminatorNetwork(config["embedding_size"], config["skill_size"], config["discrim_units"], config["discrim_units"]).to(device)
+            self.discriminator = Discriminator(config.embedding_size, config.skill_size, config.discrim_units, config.discrim_units).to(device)
         self.discriminator = nn.DataParallel(self.discriminator)
         self.discriminator.train()
         self.discriminator_criterion = nn.CrossEntropyLoss()
-        self.discriminator_optimizer = optim.SGD(self.discriminator.parameters(), lr=config["discrim_lr"], momentum=config["discrim_momentum"])
+        self.discriminator_optimizer = optim.Adam(self.discriminator.parameters(), lr=config.discrim_lr)
 
         # Goal tracking
         self.last_n_goals = deque(maxlen=100)
@@ -98,7 +99,7 @@ class Agent():
         next_state_embedding = self.embedding_fn(next_state)
         self.memory.add(state, action, skill_idx, next_state, next_state_embedding, done)
 
-        if done and (self.config["skill_size"] == 3 and self.config["env_name"] == "LunarLander-v2"):
+        if done and (self.config.skill_size == 3 and self.config.env_name == "LunarLander-v2"):
             self.last_n_goals.append((next_state, skill_idx))
             stats["mutual_info_train"] = train_mutual_info_score(self.config, self.last_n_goals)
 
@@ -112,12 +113,12 @@ class Agent():
         self.visitations[-1][y_index][x_index] += 1
 
         # Learn every UPDATE_EVERY time steps.
-        self.t_step = (self.t_step + 1) % self.config["update_every"]
+        self.t_step = (self.t_step + 1) % self.config.update_every
         if self.t_step == 0:
             # If enough samples are available in memory, get random subset and learn
-            if len(self.memory) >= self.config["batch_size"]:
+            if len(self.memory) >= self.config.batch_size:
                 experiences = self.memory.sample()
-                stats.update(self.learn(experiences, self.config["gamma"]))
+                stats.update(self.learn(experiences, self.config.gamma))
                 stats.update(self.update_discriminator(experiences))
                 return stats
             
@@ -132,7 +133,7 @@ class Agent():
             eps (float): epsilon, for epsilon-greedy action selection
         """
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
-        skill = F.one_hot(torch.tensor(skill_idx), self.config["skill_size"]).reshape(1, -1).float().to(device)
+        skill = F.one_hot(torch.tensor(skill_idx), self.config.skill_size).reshape(1, -1).float().to(device)
         self.qnetwork_local.eval()
         with torch.no_grad():
             action_values = self.qnetwork_local(state, skill)
@@ -142,7 +143,7 @@ class Agent():
         if random.random() > eps:
             action = np.argmax(action_values.cpu().data.numpy())
         else:
-            action = random.choice(np.arange(self.config["action_size"]))
+            action = random.choice(np.arange(self.config.action_size))
 
         return action
 
@@ -162,12 +163,12 @@ class Agent():
             gamma (float): discount factor
         """
         states, actions, skill_idxs, next_states, next_state_embeddings, dones = experiences
-        skills = F.one_hot(skill_idxs.view(-1), self.config["skill_size"]).float().to(device)
+        skills = F.one_hot(skill_idxs.view(-1), self.config.skill_size).float().to(device)
         
         # Calculate rewards using current discriminator
         skill_preds = self.discriminator.forward(next_state_embeddings)
         selected_probs = torch.gather(skill_preds, 1, skill_idxs)
-        rewards = torch.log(selected_probs + 1e-5) - math.log(1/self.config["skill_size"])
+        rewards = torch.log(selected_probs + 1e-5) - math.log(1/self.config.skill_size)
 
         # Get max predicted Q values (for next states) from target model
         Q_targets_next = self.qnetwork_target(next_states, skills).detach().max(1)[0].unsqueeze(1)
@@ -198,7 +199,7 @@ class Agent():
         total_norm = total_norm ** (1. / 2)
 
         # ------------------- update target network ------------------- #
-        self.soft_update(self.qnetwork_local, self.qnetwork_target, self.config["tau"])
+        self.soft_update(self.qnetwork_local, self.qnetwork_target, self.config.tau)
 
         return {
             "critic_loss": loss.item(),
@@ -212,7 +213,7 @@ class Agent():
         self.discriminator_optimizer.zero_grad()
 
         _, _, skill_idxs, _, next_state_embeddings, _ = experiences
-        skills = F.one_hot(skill_idxs.view(-1), self.config["skill_size"]).float().to(device)
+        skills = F.one_hot(skill_idxs.view(-1), self.config.skill_size).float().to(device)
         skill_preds = self.discriminator.forward(next_state_embeddings)
 
         loss = self.discriminator_criterion(skills, skill_preds)
@@ -224,7 +225,7 @@ class Agent():
         skill_idx_preds = torch.argmax(skill_preds, dim=1, keepdim=True)
         acc = torch.sum(skill_idxs == skill_idx_preds) / skill_idxs.shape[0]
 
-        ent = -torch.sum(skill_preds * torch.log(skill_preds + 1e-10) / math.log(self.config["skill_size"]), dim=1).mean()
+        ent = -torch.sum(skill_preds * torch.log(skill_preds + 1e-10) / math.log(self.config.skill_size), dim=1).mean()
 
         total_norm = 0.0
         for p in self.discriminator.parameters():

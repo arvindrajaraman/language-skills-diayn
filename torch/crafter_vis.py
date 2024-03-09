@@ -17,12 +17,12 @@ def get_frame(env, action):
 def record_rollouts(agent, env, config, device):
     agent.qnetwork_local.eval()
     stats = dict()
-    for skill_idx in range(0, config["skill_size"]):
+    for skill_idx in range(0, config.skill_size):
         print(f'Visualizing video for skill {skill_idx}')
         frames = []
         obs, _ = env.reset()
         obs = obs['obs']
-        for _ in range(config["max_steps_per_episode"]):
+        for _ in range(config.max_steps_per_episode):
             action = agent.act(obs, skill_idx, eps=0.)
             next_obs, _, done, _ = env.step(action)
             next_obs = next_obs['obs']
