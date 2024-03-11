@@ -6,7 +6,7 @@ colormaps = ['Reds', 'Greens', 'Blues', 'Purples', 'Oranges']
 
 def plot_visitations(bins, x_min, x_max, y_min, y_max, skill_idx=None, log=False):
     if log:
-        bins = np.log(bins)
+        bins = np.where(bins != 0, np.log(bins), 0)
         label = 'log(Visitation)'
     else:
         label = 'Visitation'

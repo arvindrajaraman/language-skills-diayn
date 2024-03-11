@@ -1,0 +1,62 @@
+description: LL-3 Sweep
+program: diayn.py
+method: bayes
+metric:
+  goal: maximize
+  name: discrim_acc
+parameters:
+  action_size:
+    value: 4
+  skill_size:
+    value: 3
+  state_size:
+    value: 8
+  embedding_size:
+    value: 8
+  batch_size:
+    value: 128
+  buffer_size:
+    value: 10002
+  env_name:
+    value: LunarLander-v2
+  exp_type:
+    value: mlp
+  conv:
+    value: false
+  save_checkpoints:
+    value: true
+  embedding_type:
+    value: identity
+  device:
+    value: cuda
+  tau:
+    value: 0.001
+  eps_start:
+    value: 1.0
+  eps_end:
+    value: 0.01
+  episodes:
+    value: 500000
+  log_freq:
+    value: 50000
+  discrim_units:
+    value: 512
+  policy_units:
+    value: 512
+  num_envs:
+    value: 3
+  
+  eps_decay:
+    values: [0.9995, 0.99995, 0.999995]
+  gamma:
+    values: [0.9, 0.95]
+  policy_lr:
+    values: [0.0001, 0.001, 0.01]
+  discrim_lr:
+    values: [0.0001, 0.001, 0.01]
+  discrim_update_freq:
+    values: [1, 2, 4, 8]
+  qlocal_update_freq:
+    values: [1, 2, 4, 8]
+  qtarget_update_freq:
+    values: [1, 2, 4, 8]

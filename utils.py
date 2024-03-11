@@ -13,3 +13,9 @@ def to_numpy(tensor):
 
 def to_torch(ndarray):
     return torch.from_numpy(ndarray).to('cuda').float()
+
+def to_torch_bool(ndarray):
+    return torch.from_numpy(ndarray).to('cuda').bool()
+
+def to_torch_long(ndarray):
+    return torch.from_numpy(ndarray).to('cuda').long()
