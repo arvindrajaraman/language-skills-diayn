@@ -3,10 +3,10 @@ import math
 import numpy as np
 import os
 import random
-import time
+from typing import Tuple
 
+import gym
 from ml_collections import ConfigDict
-from tensordict import TensorDict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,10 +24,21 @@ from visualization.visitations import plot_visitations
 torch.set_float32_matmul_precision('high')
 
 class DIAYN():
-    def __init__(self, config: ConfigDict):
+    def __init__(
+        self,
+        config: ConfigDict,
+        log: bool = True
+    ):
+        """Initialize the DIAYN agent, including initialization of the policy and discriminator, replay buffer, and other internal structures.
+        
+        Args:
+            config (ConfigDict): Configuration for the DIAYN agent.
+            log (bool): Whether to log to wandb.
+        """
         self.config = config
         self.t_step = 0
         self.stats = {}
+        self.log = log
 
         assert config.buffer_size % config.num_envs == 0, "Buffer size must be divisible by number of environments"
 
@@ -74,55 +85,53 @@ class DIAYN():
         # Goal tracking
         self.goal_deque = deque(maxlen=config.log_freq)
     
-    def init_qlocal_from_path(self, path):
+    def init_qlocal_from_path(
+        self,
+        path: str
+    ):
+        """Load the policy network from a path.
+        
+        Args:
+            path (str): Path to the policy network state dict.
+        """
         self.qlocal.load_state_dict(torch.load(path, map_location=torch.device('cuda')))
         self.qlocal.train()
 
-    def init_qtarget_from_path(self, path):
+    def init_qtarget_from_path(
+        self,
+        path: str
+    ):
+        """Load the target policy network from a path.
+        
+        Args:
+            path (str): Path to the target policy network state dict.
+        """
         self.qtarget.load_state_dict(torch.load(path, map_location=torch.device('cuda')))
         self.qtarget.train()
 
-    def init_discrim_from_path(self, path):
+    def init_discrim_from_path(
+        self,
+        path: str
+    ):
+        """Load the discriminator from a path.
+        
+        Args:
+            path (str): Path to the discriminator state dict.
+        """
         self.discrim.load_state_dict(torch.load(path, map_location=torch.device('cuda')))
         self.discrim.train()
-
-    # def train(self, env, run_name):
-    #     eps = self.config.eps_start
-    #     all_skills = np.eye(self.config.skill_size)
-    #     for episode in tqdm(range(self.config.episodes)):
-    #         eps = max(eps * self.config.eps_decay, self.config.eps_end)
-    #         skill = all_skills[torch.randint(0, self.config.skill_size, (self.config.num_envs,))]
-    #         obs = env.reset()
-
-    #         for t in tqdm(range(self.config.max_steps_per_episode), leave=False):
-    #             action = self.act(obs, skill, eps)
-    #             next_obs, reward, done, _ = env.step(action)
-    #             self.step(obs, action, skill, next_obs, done)
-    #             obs = next_obs
-    #             if done:
-    #                 self.goal_deque.append((next_obs, skill))
-    #                 self.stats.update({
-    #                     "reward_ground_truth": reward,
-    #                     "eps": eps,
-    #                     "episode": episode,
-    #                     "ep_length": t+1
-    #                 })
-    #                 if episode % self.config.log_freq == 0:
-    #                     torch.save(self.qlocal.state_dict(), f'./data/{run_name}/qlocal_iter{episode}.pth')
-    #                     torch.save(self.qtarget.state_dict(), f'./data/{run_name}/qtarget_iter{episode}.pth')
-    #                     torch.save(self.discrim.state_dict(), f'./data/{run_name}/discrim_iter{episode}.pth')
-    #                     for i in range(self.config.skill_size):
-    #                         self.stats[f"log_visits_rolling_s{i}"] = plot_visitations(self.visitations[i], self.min_x, self.max_x, self.min_y, self.max_y, i, log=True)
-    #                     self.stats.update({
-    #                         "log_visits_rolling_all": plot_visitations(self.visitations[-1], self.min_x, self.max_x, self.min_y, self.max_y, log=True),
-    #                         "mutual_info_rolling": train_mutual_info_score(self.config, self.goal_deque)
-    #                     })
-    #                     self.visitations = np.zeros((self.config.skill_size + 1, self.num_bins_x, self.num_bins_y))
-    #                 # wandb.log(self.stats)
-    #                 self.stats.clear()
-    #                 break
         
-    def train(self, env, run_name):
+    def train(
+        self,
+        env: gym.Env,
+        run_name: str
+    ):
+        """Train the DIAYN agent.
+        
+        Args:
+            env (gym.Env): Environment to train the agent on.
+            run_name (str): Name of the run.
+        """
         eps = self.config.eps_start
         obs = env.reset()
         skill = np.eye(self.config.skill_size)
@@ -151,11 +160,27 @@ class DIAYN():
                     torch.save(self.qlocal.state_dict(), f'./data/{run_name}/qlocal_iter{t}.pth')
                     torch.save(self.qtarget.state_dict(), f'./data/{run_name}/qtarget_iter{t}.pth')
                     torch.save(self.discrim.state_dict(), f'./data/{run_name}/discrim_iter{t}.pth')
-            if t % 50 == 0:
-                wandb.log(self.stats)
+            if t % 50 == 0 and self.log:
+                wandb.log(self.stats, step=t)
                 self.stats.clear()
 
-    def step(self, state, action, skill, next_state, done):
+    def step(
+        self,
+        state: torch.Tensor,
+        action: torch.Tensor,
+        skill: torch.Tensor,
+        next_state: torch.Tensor,
+        done: torch.Tensor
+    ):
+        """Perform a step in the environment. Record visitations and make model updates if necessary.
+        
+        Args:
+            state (torch.Tensor): Current state.
+            action (torch.Tensor): Action taken.
+            skill (torch.Tensor): Skill vector.
+            next_state (torch.Tensor): Next state.
+            done (torch.Tensor): Done flag.
+        """
         # Save experience in replay memory
         next_state_embedding = self.embedding_fn(next_state)
         self.memory.add(state, action, skill, next_state, next_state_embedding, done)
@@ -181,7 +206,19 @@ class DIAYN():
             self.update_discrim(experiences)
         self.t_step += 1
 
-    def act(self, state, skill, eps):
+    def act(
+        self,
+        state: np.ndarray,
+        skill: np.ndarray,
+        eps: float
+    ):
+        """Sample an action from the policy network using epsilon-greedy exploration.
+        
+        Args:
+            state (np.ndarray): Current state.
+            skill (np.ndarray): Skill vector.
+            eps (float): Exploration rate.
+        """
         state = to_torch(state)
         skill = to_torch(skill)
         self.qlocal.eval()
@@ -196,8 +233,15 @@ class DIAYN():
         action = np.where(explore < eps, rand_action, opt_action)
         return action
 
-    def discriminate(self, state):
-        # TODO vectorize this code
+    def discriminate(
+        self,
+        state: np.ndarray
+    ):
+        """Compute the skill probabilities for a specific state, using the discriminator.
+        
+        Args:
+            state (np.ndarray): State to discriminate.
+        """
         state = to_torch(state)
         self.discrim.eval()
         with torch.no_grad():
@@ -205,7 +249,15 @@ class DIAYN():
         self.discrim.train()
         return predictions
 
-    def update_qlocal(self, experiences):
+    def update_qlocal(
+        self,
+        experiences: Tuple
+    ):
+        """Update the policy network with a batch of experiences.
+        
+        Args:
+            experiences (Tuple): Batch of experiences.
+        """
         @torch.compile
         def _update_qlocal():
             states, actions, skills, next_states, next_state_embeddings, dones = experiences
@@ -241,10 +293,19 @@ class DIAYN():
     
     @torch.compile
     def update_qtarget(self):
+        """Perform Polyak averaging (soft update) on the target policy network with the policy network."""
         for target_param, local_param in zip(self.qtarget.parameters(), self.qlocal.parameters()):
             target_param.data.copy_(self.config.tau * local_param.data + (1.0 - self.config.tau) * target_param.data)
     
-    def update_discrim(self, experiences):
+    def update_discrim(
+        self,
+        experiences: Tuple
+    ):
+        """Update the discriminator with a batch of experiences.
+        
+        Args:
+            experiences (Tuple): Batch of experiences.
+        """
         self.discrim_opt.zero_grad()
 
         @torch.compile

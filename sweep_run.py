@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 
 from dotenv import load_dotenv
 import gym
@@ -15,6 +16,10 @@ def train():
         entity="arvind6902"
     )
     config = wandb.config
+    if "seed" not in config:
+        config['seed'] = int(datetime.now().timestamp())
+    config = FrozenConfigDict(config)
+
     env = gym.vector.make(config.env_name, num_envs=config.num_envs, asynchronous=True)
     agent = DIAYN(config)
     agent.train(env, None)
@@ -25,7 +30,7 @@ if __name__ == "__main__":
     wandb.login(key=os.getenv("WANDB_API_KEY"))
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--sweep_id', '-s', type=str, required=True)
+    parser.add_argument('--id', '-i', type=str, required=True)
     args = parser.parse_args()
 
-    wandb.agent(sweep_id=args.sweep_id, function=train)
+    wandb.agent(sweep_id=args.id, function=train)

@@ -24,7 +24,7 @@ parameters:
   conv:
     value: false
   save_checkpoints:
-    value: true
+    value: false
   embedding_type:
     value: identity
   device:

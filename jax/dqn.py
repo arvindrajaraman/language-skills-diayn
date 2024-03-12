@@ -1,4 +1,4 @@
-from jax import random
+from jax import random, jit
 import jax
 import jax.numpy as jnp
 import flax

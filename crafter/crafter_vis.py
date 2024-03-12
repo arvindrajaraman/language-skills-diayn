@@ -1,10 +1,23 @@
 import cv2
+import gym
 import numpy as np
 from PIL import Image, ImageFont, ImageDraw
 import torch
 import wandb
 
-def get_frame(env, action):
+from diayn import DIAYN
+
+def get_frame(
+    env: gym.Env,
+    action: int
+):
+    """
+    Compute a frame of the environment for a given action.
+
+    Args:
+        env (gym.Env): Environment to render
+        action (int): Action to take
+    """
     img = env.render((512, 512))
     img = cv2.resize(img, (512, 512), interpolation=cv2.INTER_LINEAR)
     img = np.asarray(img, dtype=np.uint8)
@@ -14,7 +27,21 @@ def get_frame(env, action):
     img = np.asarray(img)
     return img
 
-def record_rollouts(agent, env, config, device):
+def record_rollouts(
+    agent: DIAYN,
+    config: dict,
+    env: gym.Env,
+    device: torch.device
+):
+    """
+    Record rollouts for the given agent and environment.
+
+    Args:
+        agent (DIAYN): Agent to record rollouts for
+        config (dict): Configuration dictionary
+        env (gym.Env): Environment to record rollouts for
+        device (torch.device): Device to use for recording rollouts
+    """
     agent.qlocal.eval()
     stats = dict()
     for skill_idx in range(0, config.skill_size):
