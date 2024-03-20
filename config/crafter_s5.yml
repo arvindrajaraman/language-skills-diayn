@@ -17,6 +17,7 @@ tau: 0.001
 discrim_update_freq: 1
 qlocal_update_freq: 1
 qtarget_update_freq: 1
+discrim_reset_freq: 0
 exp_type: mlp
 embedding_type: identity
 device: cuda

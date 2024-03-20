@@ -4,40 +4,40 @@ import torch.nn.functional as F
 
 from model_utils import ResidualBlock, make_residual_layer
 
-class QNetwork(nn.Module):
-    """Actor (Policy) Model."""
+# class QNetwork(nn.Module):
+#     """Actor (Policy) Model."""
 
-    def __init__(self, state_size, action_size, fc1_units=512, fc2_units=512):
-        """Initialize parameters and build model.
-        Params
-        ======
-            state_size (int): Dimension of each state
-            action_size (int): Dimension of each action
-            fc1_units (int): Number of nodes in first hidden layer
-            fc2_units (int): Number of nodes in second hidden layer
-        """
-        super(QNetwork, self).__init__()
-        self.state_size = state_size
-        self.action_size = action_size
+#     def __init__(self, state_size, action_size, fc1_units=512, fc2_units=512):
+#         """Initialize parameters and build model.
+#         Params
+#         ======
+#             state_size (int): Dimension of each state
+#             action_size (int): Dimension of each action
+#             fc1_units (int): Number of nodes in first hidden layer
+#             fc2_units (int): Number of nodes in second hidden layer
+#         """
+#         super(QNetwork, self).__init__()
+#         self.state_size = state_size
+#         self.action_size = action_size
 
-        self.fc1 = nn.Linear(state_size, fc1_units)
-        self.dropout1 = nn.Dropout(p=0.2)
-        self.fc2 = nn.Linear(fc1_units, fc2_units)
-        self.dropout2 = nn.Dropout(p=0.2)
-        self.fc3 = nn.Linear(fc2_units, action_size)
+#         self.fc1 = nn.Linear(state_size, fc1_units)
+#         self.dropout1 = nn.Dropout(p=0.2)
+#         self.fc2 = nn.Linear(fc1_units, fc2_units)
+#         self.dropout2 = nn.Dropout(p=0.2)
+#         self.fc3 = nn.Linear(fc2_units, action_size)
 
-    def forward(self, state):
-        """Build a network that maps state -> action values."""
-        x = self.dropout1(F.gelu(self.fc1(state)))
-        x = self.dropout2(F.gelu(self.fc2(x)))
-        return self.fc3(x)
+#     def forward(self, state):
+#         """Build a network that maps state -> action values."""
+#         x = self.dropout1(F.gelu(self.fc1(state)))
+#         x = self.dropout2(F.gelu(self.fc2(x)))
+#         return self.fc3(x)
     
 class Discriminator(nn.Module):
-    def __init__(self, state_embedding_size, skill_size, fc1_units=512, fc2_units=512):
+    def __init__(self, embedding_size, skill_size, fc1_units=512, fc2_units=512):
         super(Discriminator, self).__init__()
-        self.state_embedding_size = state_embedding_size
+        self.embedding_size = embedding_size
         self.skill_size = skill_size
-        self.fc1 = nn.Linear(state_embedding_size, fc1_units)
+        self.fc1 = nn.Linear(embedding_size, fc1_units)
         self.dropout1 = nn.Dropout(p=0.2)
         self.fc2 = nn.Linear(fc1_units, fc2_units)
         self.dropout2 = nn.Dropout(p=0.2)

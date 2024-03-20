@@ -60,3 +60,5 @@ parameters:
     values: [1, 2, 4, 8]
   qtarget_update_freq:
     values: [1, 2, 4, 8]
+  discrim_reset_freq:
+    values: [0, 10000, 25000, 50000, 250000]

@@ -1,9 +1,10 @@
-import torch
+import numpy as np
 
 def naive_captioner(obs):
-    if -1.5 <= obs[0] <= -0.25:
-        return torch.Tensor([1.0, 0.0, 0.0])
-    elif -0.25 <= obs[0] <= 0.25:
-        return torch.Tensor([0.0, 1.0, 0.0])
-    else:
-        return torch.Tensor([0.0, 0.0, 1.0])
+    result = np.zeros((obs.shape[0], 3))
+    
+    result[(obs[:, 0] >= -1.5) & (obs[:, 0] < -0.33), 0] = 1.
+    result[(obs[:, 0] >= -0.33) & (obs[:, 0] < 0.33), 1] = 1.
+    result[(obs[:, 0] >= 0.33) & (obs[:, 0] < 1.5), 2] = 1.
+
+    return result

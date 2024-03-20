@@ -37,6 +37,10 @@ class ReplayBuffer:
         next_state_embeddings = self.next_state_embeddings[idxs]
         dones = self.dones[idxs].view(-1, 1)
         return states, actions, skills, next_states, next_state_embeddings, dones
+    
+    def get_all(self):
+        bound = self.config.buffer_size if self.counter >= self.config.buffer_size else self.counter
+        return self.states[:bound], self.actions[:bound], self.skills[:bound], self.next_states[:bound], self.next_state_embeddings[:bound], self.dones[:bound]
 
     def __len__(self):
         return min(self.config.buffer_size, self.counter)

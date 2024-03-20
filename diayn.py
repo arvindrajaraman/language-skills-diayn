@@ -15,10 +15,12 @@ from tqdm import tqdm
 import wandb
 
 from lunarlander.captioner import naive_captioner
-from lunarlander.metrics import train_mutual_info_score
+from lunarlander.metrics import I_zs_confusion_matrix, I_zs_score, I_za_score, std_a_score
 from models import QNet, QNetConv, Discriminator, DiscriminatorConv
 from structures import ReplayBuffer
 from utils import grad_norm, to_numpy, to_torch
+from visualization.goal_confusion import confusion_matrix_heatmap
+from visualization.pred_landscape import plot_pred_landscape
 from visualization.visitations import plot_visitations
 
 torch.set_float32_matmul_precision('high')
@@ -29,12 +31,6 @@ class DIAYN():
         config: ConfigDict,
         log: bool = True
     ):
-        """Initialize the DIAYN agent, including initialization of the policy and discriminator, replay buffer, and other internal structures.
-        
-        Args:
-            config (ConfigDict): Configuration for the DIAYN agent.
-            log (bool): Whether to log to wandb.
-        """
         self.config = config
         self.t_step = 0
         self.stats = {}
@@ -66,34 +62,30 @@ class DIAYN():
 
         # Discriminator
         discrim_type = DiscriminatorConv if config.conv else Discriminator
-        self.discrim = discrim_type(config.state_size, config.skill_size, config.discrim_units, config.discrim_units).to('cuda')
+        self.discrim = discrim_type(config.embedding_size, config.skill_size, config.discrim_units, config.discrim_units).to('cuda')
         self.discrim.train()
-        self.discrim_loss_fn = nn.CrossEntropyLoss()
         self.discrim_opt = optim.Adam(self.discrim.parameters(), lr=config.discrim_lr)
 
         # Replay buffer
         self.memory = ReplayBuffer(config)
 
         # Visitation distribution
-        self.max_x = self.max_y = 1.5
-        self.min_x = self.min_y = -1.5
+        self.min_x = -1.
+        self.max_x = 1.
+        self.min_y = 0.
+        self.max_y = 1.
         self.num_bins_x = self.num_bins_y = 50
         self.bin_size_x = (self.max_x - self.min_x) / self.num_bins_x
         self.bin_size_y = (self.max_y - self.min_y) / self.num_bins_y
         self.visitations = np.zeros((self.config.skill_size + 1, self.num_bins_x, self.num_bins_y))
 
         # Goal tracking
-        self.goal_deque = deque(maxlen=config.log_freq)
+        self.goal_skill_pairs = list()
     
     def init_qlocal_from_path(
         self,
         path: str
     ):
-        """Load the policy network from a path.
-        
-        Args:
-            path (str): Path to the policy network state dict.
-        """
         self.qlocal.load_state_dict(torch.load(path, map_location=torch.device('cuda')))
         self.qlocal.train()
 
@@ -101,11 +93,6 @@ class DIAYN():
         self,
         path: str
     ):
-        """Load the target policy network from a path.
-        
-        Args:
-            path (str): Path to the target policy network state dict.
-        """
         self.qtarget.load_state_dict(torch.load(path, map_location=torch.device('cuda')))
         self.qtarget.train()
 
@@ -113,11 +100,6 @@ class DIAYN():
         self,
         path: str
     ):
-        """Load the discriminator from a path.
-        
-        Args:
-            path (str): Path to the discriminator state dict.
-        """
         self.discrim.load_state_dict(torch.load(path, map_location=torch.device('cuda')))
         self.discrim.train()
         
@@ -126,12 +108,6 @@ class DIAYN():
         env: gym.Env,
         run_name: str
     ):
-        """Train the DIAYN agent.
-        
-        Args:
-            env (gym.Env): Environment to train the agent on.
-            run_name (str): Name of the run.
-        """
         eps = self.config.eps_start
         obs = env.reset()
         skill = np.eye(self.config.skill_size)
@@ -140,29 +116,35 @@ class DIAYN():
             action = self.act(obs, skill, eps)
             next_obs, reward, done, _ = env.step(action)
             self.step(obs, action, skill, next_obs, done)
-            obs = next_obs
             self.stats.update({
                 "reward_ground_truth": reward.mean(),
                 "eps": eps,
             })
             done_idxs = np.argwhere(done)
             for done_idx in done_idxs:
-                self.goal_deque.append((next_obs[done_idx][0], skill[done_idx][0]))
+                self.goal_skill_pairs.append((obs[done_idx][0], skill[done_idx][0]))
             if t % self.config.log_freq == 0:
                 for i in range(self.config.skill_size):
                     self.stats[f"log_visits_rolling_s{i}"] = plot_visitations(self.visitations[i], self.min_x, self.max_x, self.min_y, self.max_y, i, log=True)
+                conf_mtx = I_zs_confusion_matrix(self.config, self.goal_skill_pairs)
                 self.stats.update({
                     "log_visits_rolling_all": plot_visitations(self.visitations[-1], self.min_x, self.max_x, self.min_y, self.max_y, log=True),
-                    "mutual_info_rolling": train_mutual_info_score(self.config, self.goal_deque)
+                    "pred_landscape": plot_pred_landscape(self.discrim, self.embedding_fn),
+                    "goal_confusion_rolling": confusion_matrix_heatmap(conf_mtx),
+                    "I(z;s)_rolling": I_zs_score(conf_mtx),
+                    "I(z;a)_rolling": I_za_score(self.config, self),
+                    "std_a_rolling": std_a_score(self.config, self),
                 })
+                self.goal_skill_pairs.clear()
                 self.visitations = np.zeros((self.config.skill_size + 1, self.num_bins_x, self.num_bins_y))
-                if self.config.save_checkpoints:
+                if self.config.save_checkpoints and self.log:
                     torch.save(self.qlocal.state_dict(), f'./data/{run_name}/qlocal_iter{t}.pth')
                     torch.save(self.qtarget.state_dict(), f'./data/{run_name}/qtarget_iter{t}.pth')
                     torch.save(self.discrim.state_dict(), f'./data/{run_name}/discrim_iter{t}.pth')
             if t % 50 == 0 and self.log:
                 wandb.log(self.stats, step=t)
                 self.stats.clear()
+            obs = next_obs
 
     def step(
         self,
@@ -172,15 +154,6 @@ class DIAYN():
         next_state: torch.Tensor,
         done: torch.Tensor
     ):
-        """Perform a step in the environment. Record visitations and make model updates if necessary.
-        
-        Args:
-            state (torch.Tensor): Current state.
-            action (torch.Tensor): Action taken.
-            skill (torch.Tensor): Skill vector.
-            next_state (torch.Tensor): Next state.
-            done (torch.Tensor): Done flag.
-        """
         # Save experience in replay memory
         next_state_embedding = self.embedding_fn(next_state)
         self.memory.add(state, action, skill, next_state, next_state_embedding, done)
@@ -196,6 +169,8 @@ class DIAYN():
         self.visitations[-1, y_index, x_index] += 1.
 
         # Perform model updates
+        if self.config.discrim_reset_freq != 0 and self.t_step % self.config.discrim_reset_freq == 0:
+            self.discrim.fc3.reset_parameters()
         if self.t_step % self.config.qlocal_update_freq == 0 and len(self.memory) >= self.config.batch_size:
             experiences = self.memory.sample()
             self.update_qlocal(experiences)
@@ -211,14 +186,7 @@ class DIAYN():
         state: np.ndarray,
         skill: np.ndarray,
         eps: float
-    ):
-        """Sample an action from the policy network using epsilon-greedy exploration.
-        
-        Args:
-            state (np.ndarray): Current state.
-            skill (np.ndarray): Skill vector.
-            eps (float): Exploration rate.
-        """
+    ) -> np.ndarray:
         state = to_torch(state)
         skill = to_torch(skill)
         self.qlocal.eval()
@@ -232,16 +200,24 @@ class DIAYN():
 
         action = np.where(explore < eps, rand_action, opt_action)
         return action
+    
+    def act_probs(
+        self,
+        state: np.ndarray,
+        skill: np.ndarray
+    ) -> np.ndarray:
+        state = to_torch(state)
+        skill = to_torch(skill)
+        self.qlocal.eval()
+        with torch.no_grad():
+            action_probs = to_numpy(F.softmax(self.qlocal(state, skill), dim=1))
+        self.qlocal.train()
+        return action_probs
 
     def discriminate(
         self,
         state: np.ndarray
-    ):
-        """Compute the skill probabilities for a specific state, using the discriminator.
-        
-        Args:
-            state (np.ndarray): State to discriminate.
-        """
+    ) -> torch.Tensor:
         state = to_torch(state)
         self.discrim.eval()
         with torch.no_grad():
@@ -253,11 +229,6 @@ class DIAYN():
         self,
         experiences: Tuple
     ):
-        """Update the policy network with a batch of experiences.
-        
-        Args:
-            experiences (Tuple): Batch of experiences.
-        """
         @torch.compile
         def _update_qlocal():
             states, actions, skills, next_states, next_state_embeddings, dones = experiences
@@ -293,7 +264,6 @@ class DIAYN():
     
     @torch.compile
     def update_qtarget(self):
-        """Perform Polyak averaging (soft update) on the target policy network with the policy network."""
         for target_param, local_param in zip(self.qtarget.parameters(), self.qlocal.parameters()):
             target_param.data.copy_(self.config.tau * local_param.data + (1.0 - self.config.tau) * target_param.data)
     
@@ -301,19 +271,20 @@ class DIAYN():
         self,
         experiences: Tuple
     ):
-        """Update the discriminator with a batch of experiences.
-        
-        Args:
-            experiences (Tuple): Batch of experiences.
-        """
-        self.discrim_opt.zero_grad()
-
         @torch.compile
         def _update_discrim():
             _, _, skills, _, next_state_embeddings, _ = experiences
             skill_preds = self.discrim.forward(next_state_embeddings)
 
-            loss = self.discrim_loss_fn(skills, skill_preds)
+            col_counts = next_state_embeddings.sum(axis=0)
+            missing_classes = torch.any(col_counts < 1e-9)
+            if missing_classes:
+                return float('nan'), float('nan'), float('nan')
+            weights = 1. / (col_counts + 1e-9)
+
+            loss = F.cross_entropy(skill_preds, skills, weight=weights)
+            # loss = F.cross_entropy(skill_preds, skills)
+            self.discrim_opt.zero_grad()
             loss.backward()
             self.discrim_opt.step()
 
@@ -325,8 +296,8 @@ class DIAYN():
         loss, acc, ent = _update_discrim()
 
         self.stats.update({
-            "discrim_loss": loss.item(),
-            "discrim_acc": acc.item(),
-            "discrim_ent": ent.item(),
-            "discrim_grad_norm": grad_norm(self.discrim),
+            "discrim_loss": loss if math.isnan(loss) else loss.item(),
+            "discrim_acc": acc if math.isnan(acc) else acc.item(),
+            "discrim_ent": ent if math.isnan(ent) else ent.item(),
+            "discrim_grad_norm": 0. if math.isnan(loss) else grad_norm(self.discrim),
         })

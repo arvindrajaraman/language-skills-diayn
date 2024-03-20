@@ -15,6 +15,7 @@ tau: 0.01
 discrim_update_freq: 1
 qlocal_update_freq: 1
 qtarget_update_freq: 1
+discrim_reset_freq: 0
 exp_type: mlp
 discrim_units: 512
 policy_units: 512
