@@ -23,7 +23,7 @@ from visualization.goal_confusion import confusion_matrix_heatmap
 from visualization.pred_landscape import plot_pred_landscape
 from visualization.visitations import plot_visitations
 
-torch.set_float32_matmul_precision('high')
+# torch.set_float32_matmul_precision('high')
 
 class DIAYN():
     def __init__(
@@ -229,7 +229,7 @@ class DIAYN():
         self,
         experiences: Tuple
     ):
-        @torch.compile
+        # @torch.compile
         def _update_qlocal():
             states, actions, skills, next_states, next_state_embeddings, dones = experiences
             skill_idxs = torch.argmax(skills, dim=1, keepdim=True)
@@ -262,16 +262,18 @@ class DIAYN():
             "reward_skill": rewards.mean().item(),
         })
     
-    @torch.compile
+    # @torch.compile
     def update_qtarget(self):
         for target_param, local_param in zip(self.qtarget.parameters(), self.qlocal.parameters()):
             target_param.data.copy_(self.config.tau * local_param.data + (1.0 - self.config.tau) * target_param.data)
+            # new_target_param_data = self.config.tau * local_param.data + (1.0 - self.config.tau) * target_param.data
+            # target_param.data = new_target_param_data.clone().detach()
     
     def update_discrim(
         self,
         experiences: Tuple
     ):
-        @torch.compile
+        # @torch.compile
         def _update_discrim():
             _, _, skills, _, next_state_embeddings, _ = experiences
             skill_preds = self.discrim.forward(next_state_embeddings)
