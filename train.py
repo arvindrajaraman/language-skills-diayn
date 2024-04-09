@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 import gym
 from ml_collections import FrozenConfigDict
 import os
-import torch
 
 import wandb
 import yaml
