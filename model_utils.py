@@ -1,42 +1,88 @@
-import torch.nn as nn
+import flax
+import flax.linen as nn
+import jax
+import jax.numpy as jnp
+import numpy as np
+import optax
+
+from typing import List
+
+resnet_kernel_init = nn.initializers.variance_scaling(2.0, mode='fan_out', distribution='normal')
+
+# class ResidualBlock(nn.Module):
+#     out_channels: int
+#     subsample: bool = False
+
+#     @nn.compact
+#     def __call__(self, x, train=True):
+#         y = nn.Conv(self.out_channels, kernel_size=(3, 3),
+#                     strides=(1, 1),
+#                     kernel_init=resnet_kernel_init,
+#                     use_bias=False)(x)
+#         y = nn.BatchNorm()(y, use_running_average=not train)
+#         y = nn.relu(y)
+#         y = nn.Conv(self.out_channels, kernel_size=(3, 3),
+#                     kernel_init=resnet_kernel_init,
+#                     use_bias=False)(y)
+#         y = nn.BatchNorm()(y, use_running_average=not train)
+
+#         if self.subsample:
+#             x = nn.Conv(self.out_channels, kernel_size=(1, 1), strides=(2, 2), kernel_init=resnet_kernel_init)(x)
+
+#         x_out = nn.relu(y + x)
+#         return x_out
+
+# class ResidualBlock(nn.Module):
+#     out_channels: int
+
+#     @nn.compact
+#     def __call__(self, x):
+#         residual = x
+#         x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1), padding="SAME")(x)
+#         x = nn.BatchNorm()(x)
+#         x = nn.relu(x)
+#         x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1), padding="SAME")(x)
+#         x = nn.BatchNorm()(x)
+#         x = x + residual  # Residual connection
+#         x = nn.relu(x)
+#         return x
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
-        super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.downsample = None
+    out_channels: int
+    stride: int
+    subsample: bool
 
-        if stride != 1 or in_channels != out_channels:
-            self.downsample = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels)
-            )
+    @nn.compact
+    def __call__(self, x, train=True):
+        y = nn.Conv(features=self.out_channels, kernel_size=3, kernel_init=resnet_kernel_init, strides=self.stride, padding=1, use_bias=False)(x)
+        y = nn.BatchNorm(dtype=jnp.float32, use_running_average=not train)(y)
+        y = nn.relu(y)
+        y = nn.Conv(features=self.out_channels, kernel_size=3, kernel_init=resnet_kernel_init, strides=1, padding=1, use_bias=False)(y)
+        y = nn.BatchNorm(dtype=jnp.float32, use_running_average=not train)(y)
+        if self.subsample:
+            i = nn.Conv(features=self.out_channels, kernel_size=1, kernel_init=resnet_kernel_init, strides=self.stride, use_bias=False)(x)
+            i = nn.BatchNorm(dtype=jnp.float32, use_running_average=not train)(i)
+        else:
+            i = x
+        y += i
+        y = nn.relu(y)
+        return y
 
-    def forward(self, x):
-        identity = x
+class ResidualLayer(nn.Module):
+    out_channels: int
+    stride: int
+    num_blocks: int
 
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
+    res_blocks: List[ResidualBlock]
 
-        out = self.conv2(out)
-        out = self.bn2(out)
+    def setup(self):
+        self.res_blocks.append(ResidualBlock(out_channels=self.out_channels, stride=self.stride, downsample=True))
+        for _ in range(self.num_blocks):
+            self.res_blocks.append(ResidualBlock(sout_channels=self.out_channels, stride=1, downsample=False))
 
-        if self.downsample is not None:
-            identity = self.downsample(x)
-
-        out += identity
-        out = self.relu(out)
-
-        return out
-    
-def make_residual_layer(in_channels, out_channels, num_blocks, stride=1):
-    layers = []
-    layers.append(ResidualBlock(in_channels, out_channels, stride))
-    for _ in range(1, num_blocks):
-        layers.append(ResidualBlock(out_channels, out_channels, stride=1))
-    return nn.Sequential(*layers)
+    @nn.compact
+    def __call__(self, x):
+        y = x
+        for res_block in self.res_blocks:
+            y = res_block(y)
+        return y

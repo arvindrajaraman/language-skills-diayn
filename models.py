@@ -1,181 +1,78 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from typing import List
 
-from model_utils import ResidualBlock, make_residual_layer
+import flax
+import flax.linen as nn
+import jax
+import jax.numpy as jnp
+import numpy as np
+import optax
 
-# class QNetwork(nn.Module):
-#     """Actor (Policy) Model."""
-
-#     def __init__(self, state_size, action_size, fc1_units=512, fc2_units=512):
-#         """Initialize parameters and build model.
-#         Params
-#         ======
-#             state_size (int): Dimension of each state
-#             action_size (int): Dimension of each action
-#             fc1_units (int): Number of nodes in first hidden layer
-#             fc2_units (int): Number of nodes in second hidden layer
-#         """
-#         super(QNetwork, self).__init__()
-#         self.state_size = state_size
-#         self.action_size = action_size
-
-#         self.fc1 = nn.Linear(state_size, fc1_units)
-#         self.dropout1 = nn.Dropout(p=0.2)
-#         self.fc2 = nn.Linear(fc1_units, fc2_units)
-#         self.dropout2 = nn.Dropout(p=0.2)
-#         self.fc3 = nn.Linear(fc2_units, action_size)
-
-#     def forward(self, state):
-#         """Build a network that maps state -> action values."""
-#         x = self.dropout1(F.gelu(self.fc1(state)))
-#         x = self.dropout2(F.gelu(self.fc2(x)))
-#         return self.fc3(x)
-    
-class Discriminator(nn.Module):
-    def __init__(self, embedding_size, skill_size, fc1_units=512, fc2_units=512):
-        super(Discriminator, self).__init__()
-        self.embedding_size = embedding_size
-        self.skill_size = skill_size
-        self.fc1 = nn.Linear(embedding_size, fc1_units)
-        self.dropout1 = nn.Dropout(p=0.2)
-        self.fc2 = nn.Linear(fc1_units, fc2_units)
-        self.dropout2 = nn.Dropout(p=0.2)
-        self.fc3 = nn.Linear(fc2_units, skill_size)
-
-    def forward(self, state):
-        x = state
-        x = self.dropout1(F.gelu(self.fc1(x)))
-        x = self.dropout2(F.gelu(self.fc2(x)))
-        return F.softmax(self.fc3(x), dim=1)
-    
-class DiscriminatorConv(nn.Module):
-    def __init__(self, state_shape, skill_size, fc1_units=512, fc2_units=512):
-        super(DiscriminatorConv, self).__init__()
-        self.height, self.width, self.n_channels = state_shape
-        assert self.height == self.width, "Code is not optimized for non-square images. You may comment this assertion out."
-        self.skill_size = skill_size
-
-        self.res1 = make_residual_layer(self.height,     self.height,     3)
-        self.res2 = make_residual_layer(self.height,     self.height * 2, 4, stride=2)
-        self.res3 = make_residual_layer(self.height * 2, self.height * 4, 6, stride=2)
-        self.res4 = make_residual_layer(self.height * 4, self.height * 8, 3, stride=2)
-
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-
-        self.fc1 = nn.Linear(self.height * 8, fc1_units)
-        self.dropout1 = nn.Dropout(p=0.2)
-        self.fc2 = nn.Linear(fc1_units, fc2_units)
-        self.dropout2 = nn.Dropout(p=0.2)
-        self.fc3 = nn.Linear(fc2_units, skill_size)
-
-    def forward(self, state):
-        # Residual layers
-        if state.dim() == 3:
-            x = state.unsqueeze(0)
-        else:
-            x = state
-
-        x = self.res1(x)
-        x = self.res2(x)
-        x = self.res3(x)
-        x = self.res4(x)
-
-        # Average pool and flatten
-        x = self.avg_pool(x)
-        x = x.view(x.size(0), -1)
-
-        x = self.dropout1(F.gelu(self.fc1(x)))
-        x = self.dropout2(F.gelu(self.fc2(x)))
-        x = F.softmax(self.fc3(x), dim=1)
-
-        if state.dim() == 3:
-            x = x.squeeze()
-
-        return x
+# from model_utils import ResidualLayer
 
 class QNet(nn.Module):
-    """Actor (Policy) Model with skill input."""
+    action_size: int
+    hidden1_size: int
+    hidden2_size: int
+    dropout_rate: float
 
-    def __init__(self, state_size, action_size, skill_size, fc1_units=512, fc2_units=512):
-        """Initialize parameters and build model.
-        Params
-        ======
-            state_size (int): Dimension of each state
-            action_size (int): Dimension of each action
-            skill_size (int): Dimension of skill
-            fc1_units (int): Number of nodes in first hidden layer
-            fc2_units (int): Number of nodes in second hidden layer
-        """
-        super(QNet, self).__init__()
-        self.state_size = state_size
-        self.action_size = action_size
-        self.skill_size = skill_size
-
-        self.fc1 = nn.Linear(state_size + skill_size, fc1_units)
-        self.dropout1 = nn.Dropout(p=0.2)
-        self.fc2 = nn.Linear(fc1_units, fc2_units)
-        self.dropout2 = nn.Dropout(p=0.2)
-        self.fc3 = nn.Linear(fc2_units, action_size)
-
-    def forward(self, state, skill):
-        """Build a network that maps state -> action values."""
-        inp = torch.cat((state, skill), dim=1)
-        x = self.dropout1(F.gelu(self.fc1(inp)))
-        x = self.dropout2(F.gelu(self.fc2(x)))
-        return self.fc3(x)
+    @nn.compact
+    def __call__(self, state, skill, train):
+        x = jnp.concatenate((state, skill), axis=-1)
+        x = nn.Dense(features=self.hidden1_size)(x)
+        x = nn.relu(x)
+        # x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+        x = nn.Dense(features=self.hidden2_size)(x)
+        x = nn.relu(x)
+        # x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+        x = nn.Dense(features=self.action_size)(x)
+        return x
     
-class QNetConv(nn.Module):
-    """Actor (Policy) Model."""
+# class QNetConv(nn.Module):
+#     out_channels: int
+#     action_size: int
+#     hidden1_size: int
+#     hidden2_size: int
+#     dropout_rate: float
 
-    def __init__(self, state_shape, action_size, skill_size, fc1_units=512, fc2_units=512):
-        """Initialize parameters and build model.
-        Params
-        ======
-            state_shape (int): tuple of state_shape (height, width, n_channels)
-            action_size (int): Dimension of each action
-            fc1_units (int): Number of nodes in first hidden layer
-            fc2_units (int): Number of nodes in second hidden layer
-        """
-        super(QNetConv, self).__init__()
-        self.height, self.width, self.n_channels = state_shape
-        assert self.height == self.width, "Code is not optimized for non-square images. You may comment this assertion out."
-        self.action_size = action_size
-        self.skill_size = skill_size
+#     res_layers: List[ResidualLayer]
 
-        self.res1 = make_residual_layer(self.height,     self.height,     3)
-        self.res2 = make_residual_layer(self.height,     self.height * 2, 4, stride=2)
-        self.res3 = make_residual_layer(self.height * 2, self.height * 4, 6, stride=2)
-        self.res4 = make_residual_layer(self.height * 4, self.height * 8, 3, stride=2)
+#     def setup(self):
+#         res1 = ResidualLayer(out_channels=self.out_channels,     stride=1, num_blocks=3)
+#         res2 = ResidualLayer(out_channels=self.out_channels * 2, stride=2, num_blocks=4)
+#         res3 = ResidualLayer(out_channels=self.out_channels * 4, stride=2, num_blocks=6)
+#         res4 = ResidualLayer(out_channels=self.out_channels * 8, stride=2, num_blocks=3)
+#         self.res_layers = [res1, res2, res3, res4]
 
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+#     def __call__(self, state, skill, train):
+#         x = state
+#         for res_layer in self.res_layers:
+#             x = res_layer(x)
 
-        self.fc1 = nn.Linear((self.height * 8) + skill_size, fc1_units)
-        self.dropout1 = nn.Dropout(p=0.2)
-        self.fc2 = nn.Linear(fc1_units, fc2_units)
-        self.dropout2 = nn.Dropout(p=0.2)
-        self.fc3 = nn.Linear(fc2_units, action_size)
+#         x = nn.avg_pool(x)
+#         x = jnp.concatenate((x, skill), axis=1)
+#         x = nn.Dense(features=self.hidden1_size)(x)
+#         x = nn.relu(x)
+#         x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+#         x = nn.Dense(features=self.hidden2_size)(x)
+#         x = nn.relu(x)
+#         x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+#         x = nn.Dense(features=self.action_size)(x)
 
-    def forward(self, state, skill):
-        """Build a network that maps state -> action values."""
-        if state.dim() == 3:
-            x = state.unsqueeze(0)
-        else:
-            x = state
+#         return x
 
-        # Residual layers
-        x = self.res1(x)
-        x = self.res2(x)
-        x = self.res3(x)
-        x = self.res4(x)
+class Discriminator(nn.Module):
+    skill_size: int
+    hidden1_size: int
+    hidden2_size: int
+    dropout_rate: float
 
-        # Average pool and flatten
-        x = self.avg_pool(x)
-        x = x.view(x.size(0), -1)
-
-        x = torch.cat((x, skill), dim=1)
-        x = self.dropout1(F.gelu(self.fc1(x)))
-        x = self.dropout2(F.gelu(self.fc2(x)))
-        x = self.fc3(x)
-
+    @nn.compact
+    def __call__(self, x, train):
+        x = nn.Dense(features=self.hidden1_size)(x)
+        x = nn.relu(x)
+        x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+        x = nn.Dense(features=self.hidden2_size)(x)
+        x = nn.relu(x)
+        x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+        x = nn.Dense(features=self.skill_size)(x)
         return x

@@ -1,10 +1,8 @@
 # Custom for this project
 wandb/
 data/
-state_captioner_model.pt
-transition_captioner_model.pt
-slurm/*.out
-slurm/*.txt
+logs/*.out
+logs/*.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,7 +1,7 @@
+from flax import linen as nn
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import jax.numpy as jnp
-from flax import linen as nn
 import wandb
 
 from lunar_utils import normalize_freq_matrix

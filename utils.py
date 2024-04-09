@@ -1,21 +1,7 @@
-import torch
+import jax
+import jax.numpy as jnp
 
-def grad_norm(model):
-    total_norm = 0.0
-    for p in model.parameters():
-        param_norm = p.grad.data.norm(2)
-        total_norm += param_norm.item() ** 2
-    total_norm = total_norm ** (1. / 2)
-    return total_norm
-
-def to_numpy(tensor):
-    return tensor.detach().cpu().numpy()
-
-def to_torch(ndarray):
-    return torch.from_numpy(ndarray).to('cuda').float()
-
-def to_torch_bool(ndarray):
-    return torch.from_numpy(ndarray).to('cuda').bool()
-
-def to_torch_long(ndarray):
-    return torch.from_numpy(ndarray).to('cuda').long()
+def grad_norm(grads):
+    grad_norms = jax.tree_util.tree_map(jnp.linalg.norm, grads)
+    grad_norm_avg = jax.tree_util.tree_reduce(lambda x, y: x + y, grad_norms) / len(grad_norms)
+    return grad_norm_avg

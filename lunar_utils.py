@@ -1,8 +1,9 @@
 from functools import partial
+
+from icecream import ic
 from jax import jit
 import jax
 import jax.numpy as jnp
-from icecream import ic
 
 @jit
 def classify_goal(x):

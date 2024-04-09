@@ -1,305 +1,379 @@
-from collections import deque
+# python
+import argparse
+from datetime import datetime
 import math
-import numpy as np
 import os
-import random
-from typing import Tuple
+from pathlib import Path
+import yaml
 
+# packages
+from craftax_classic.envs.craftax_symbolic_env import CraftaxClassicSymbolicEnv
+from dotenv import load_dotenv
+from environment_base.wrappers import AutoResetEnvWrapper, BatchEnvWrapper
+import flashbax as fbx
+from flax import linen as nn
+from flax.training import orbax_utils
+from functools import partial
 import gym
+from icecream import ic
+from jax import random, jit
+import jax
+import jax.numpy as jnp
+import jax.lax as lax
 from ml_collections import ConfigDict
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
+import numpy as onp
+import optax
+import orbax.checkpoint
 from tqdm import tqdm
 import wandb
 
-from lunarlander.captioner import naive_captioner
-from lunarlander.metrics import I_zs_confusion_matrix, I_zs_score, I_za_score
-from models import QNet, QNetConv, Discriminator, DiscriminatorConv
-from structures import ReplayBuffer
-from utils import grad_norm, to_numpy, to_torch
-from visualization.goal_confusion import confusion_matrix_heatmap
-from visualization.pred_landscape import plot_pred_landscape
-from visualization.visitations import plot_visitations
+# files
+from models import QNet, Discriminator
+from utils import grad_norm
+import lunar_utils
+import lunar_vis
 
-# torch.set_float32_matmul_precision('high')
+@partial(jit, static_argnames=('qlocal', 'action_size', 'num_envs'))
+def act(key, qlocal, qlocal_params, state, skill, action_size, num_envs, eps=0.0):
+    def _random_action(action_key):
+        action = random.choice(action_key, jnp.arange(action_size))
+        return action
 
-class DIAYN():
-    def __init__(
-        self,
-        config: ConfigDict,
-        log: bool = True
-    ):
-        self.config = config
-        self.t_step = 0
-        self.stats = {}
-        self.log = log
-
-        assert config.buffer_size % config.num_envs == 0, "Buffer size must be divisible by number of environments"
-
-        # Set embedding function
-        if config.embedding_type == 'identity':
-            self.embedding_fn = lambda x: x
-        elif config.embedding_type == 'naive':
-            self.embedding_fn = naive_captioner
-        else:
-            raise ValueError(f"Invalid embedding type: {config['embedding_type']}")
-
-        # Set seed
-        random.seed(config.seed)
-        os.environ['PYTHONHASHSEED'] = str(config.seed)
-        np.random.seed(config.seed)
-        torch.manual_seed(config.seed)
-
-        # Policy: local and target q-networks
-        q_type = QNetConv if config.conv else QNet
-        self.qlocal = q_type(config.state_size, config.action_size, config.skill_size, config.policy_units, config.policy_units).to('cuda')
-        self.qtarget = q_type(config.state_size, config.action_size, config.skill_size, config.policy_units, config.policy_units).to('cuda')
-        self.qlocal.train()
-        self.qtarget.train()
-        self.qlocal_opt = optim.Adam(self.qlocal.parameters(), lr=config.policy_lr)
-
-        # Discriminator
-        discrim_type = DiscriminatorConv if config.conv else Discriminator
-        self.discrim = discrim_type(config.embedding_size, config.skill_size, config.discrim_units, config.discrim_units).to('cuda')
-        self.discrim.train()
-        self.discrim_opt = optim.Adam(self.discrim.parameters(), lr=config.discrim_lr)
-
-        # Replay buffer
-        self.memory = ReplayBuffer(config)
-
-        # Visitation distribution
-        self.min_x = -1.
-        self.max_x = 1.
-        self.min_y = 0.
-        self.max_y = 1.
-        self.num_bins_x = self.num_bins_y = 50
-        self.bin_size_x = (self.max_x - self.min_x) / self.num_bins_x
-        self.bin_size_y = (self.max_y - self.min_y) / self.num_bins_y
-        self.visitations = np.zeros((self.config.skill_size + 1, self.num_bins_x, self.num_bins_y))
-
-        # Goal tracking
-        self.goal_skill_pairs = list()
-    
-    def init_qlocal_from_path(
-        self,
-        path: str
-    ):
-        self.qlocal.load_state_dict(torch.load(path, map_location=torch.device('cuda')))
-        self.qlocal.train()
-
-    def init_qtarget_from_path(
-        self,
-        path: str
-    ):
-        self.qtarget.load_state_dict(torch.load(path, map_location=torch.device('cuda')))
-        self.qtarget.train()
-
-    def init_discrim_from_path(
-        self,
-        path: str
-    ):
-        self.discrim.load_state_dict(torch.load(path, map_location=torch.device('cuda')))
-        self.discrim.train()
-        
-    def train(
-        self,
-        env: gym.Env,
-        run_name: str
-    ):
-        eps = self.config.eps_start
-        obs = env.reset()
-        skill = np.eye(self.config.skill_size)
-        for t in tqdm(range(self.config.episodes)):
-            eps = max(eps * self.config.eps_decay, self.config.eps_end)
-            action = self.act(obs, skill, eps)
-            next_obs, reward, done, _ = env.step(action)
-            self.step(obs, action, skill, next_obs, done)
-            self.stats.update({
-                "reward_ground_truth": reward.mean(),
-                "eps": eps,
-            })
-            done_idxs = np.argwhere(done)
-            for done_idx in done_idxs:
-                self.goal_skill_pairs.append((obs[done_idx][0], skill[done_idx][0]))
-            if t % self.config.log_freq == 0:
-                for i in range(self.config.skill_size):
-                    self.stats[f"log_visits_rolling_s{i}"] = plot_visitations(self.visitations[i], self.min_x, self.max_x, self.min_y, self.max_y, i, log=True)
-                conf_mtx = I_zs_confusion_matrix(self.config, self.goal_skill_pairs)
-                self.stats.update({
-                    "log_visits_rolling_all": plot_visitations(self.visitations[-1], self.min_x, self.max_x, self.min_y, self.max_y, log=True),
-                    "pred_landscape": plot_pred_landscape(self.discrim, self.embedding_fn),
-                    "goal_confusion_rolling": confusion_matrix_heatmap(conf_mtx),
-                    "I(z;s)_rolling": I_zs_score(conf_mtx),
-                    "I(z;a)_rolling": I_za_score(self.config, self),
-                })
-                self.goal_skill_pairs.clear()
-                self.visitations = np.zeros((self.config.skill_size + 1, self.num_bins_x, self.num_bins_y))
-                if self.config.save_checkpoints and self.log:
-                    torch.save(self.qlocal.state_dict(), f'./data/{run_name}/qlocal_iter{t}.pth')
-                    torch.save(self.qtarget.state_dict(), f'./data/{run_name}/qtarget_iter{t}.pth')
-                    torch.save(self.discrim.state_dict(), f'./data/{run_name}/discrim_iter{t}.pth')
-            if t % 50 == 0 and self.log:
-                wandb.log(self.stats, step=t)
-                self.stats.clear()
-            obs = next_obs
-
-    def step(
-        self,
-        state: torch.Tensor,
-        action: torch.Tensor,
-        skill: torch.Tensor,
-        next_state: torch.Tensor,
-        done: torch.Tensor
-    ):
-        # Save experience in replay memory
-        next_state_embedding = self.embedding_fn(next_state)
-        self.memory.add(state, action, skill, next_state, next_state_embedding, done)
-
-        # Record visitation
-        x_index = ((state[:, 0] - self.min_x) / self.bin_size_x).astype(int)
-        x_index = np.minimum(np.maximum(x_index, np.zeros_like(x_index)), np.full_like(x_index, self.num_bins_x - 1))
-        y_index = ((state[:, 1] - self.min_y) / self.bin_size_y).astype(int)
-        y_index = np.minimum(np.maximum(y_index, np.zeros_like(y_index)), np.full_like(x_index, self.num_bins_y - 1))
-
-        skill_idx = np.argmax(skill, axis=1)
-        self.visitations[skill_idx, y_index, x_index] += 1.
-        self.visitations[-1, y_index, x_index] += 1.
-
-        # Perform model updates
-        if self.config.discrim_reset_freq != 0 and self.t_step % self.config.discrim_reset_freq == 0:
-            self.discrim.fc3.reset_parameters()
-        if self.t_step % self.config.qlocal_update_freq == 0 and len(self.memory) >= self.config.batch_size:
-            experiences = self.memory.sample()
-            self.update_qlocal(experiences)
-        if self.t_step % self.config.qtarget_update_freq == 0:
-            self.update_qtarget()
-        if self.t_step % self.config.discrim_update_freq == 0:
-            experiences = self.memory.sample()
-            self.update_discrim(experiences)
-        self.t_step += 1
-
-    def act(
-        self,
-        state: np.ndarray,
-        skill: np.ndarray,
-        eps: float
-    ) -> np.ndarray:
-        state = to_torch(state)
-        skill = to_torch(skill)
-        self.qlocal.eval()
-        with torch.no_grad():
-            action_values = to_numpy(self.qlocal(state, skill))
-        self.qlocal.train()
-
-        explore = np.random.rand(self.config.num_envs,)
-        rand_action = np.random.randint(0, self.config.action_size, (self.config.num_envs,))
-        opt_action = np.argmax(action_values, axis=1)
-
-        action = np.where(explore < eps, rand_action, opt_action)
+    def _greedy_action():
+        qvalues = qlocal.apply(qlocal_params, state, skill, train=False)
+        action = jnp.argmax(qvalues, axis=-1)
         return action
     
-    def act_probs(
-        self,
-        state: np.ndarray,
-        skill: np.ndarray
-    ) -> np.ndarray:
-        state = to_torch(state)
-        skill = to_torch(skill)
-        self.qlocal.eval()
-        with torch.no_grad():
-            action_probs = to_numpy(F.softmax(self.qlocal(state, skill), dim=1))
-        self.qlocal.train()
-        return action_probs
+    key, explore_key, action_key = random.split(key, num=3)
+    explore = eps > random.uniform(explore_key, shape=(num_envs,))
+    action = jnp.where(
+        explore,
+        _random_action(action_key),
+        _greedy_action()
+    )
 
-    def discriminate(
-        self,
-        state: np.ndarray
-    ) -> torch.Tensor:
-        state = to_torch(state)
-        self.discrim.eval()
-        with torch.no_grad():
-            predictions = self.discrim(state)[0]
-        self.discrim.train()
-        return predictions
+    return key, action
 
-    def update_qlocal(
-        self,
-        experiences: Tuple
-    ):
-        # @torch.compile
-        def _update_qlocal():
-            states, actions, skills, next_states, next_state_embeddings, dones = experiences
-            skill_idxs = torch.argmax(skills, dim=1, keepdim=True)
+@partial(jit, static_argnames=('discrim'))
+def discriminate(discrim, discrim_params, state_embedding):
+    skill_logits = discrim.apply(discrim_params, state_embedding, train=False)
+    skill_probs = nn.activation.softmax(skill_logits)
+    return skill_probs
+
+def train(key, config, run_name, log):
+    # 1. Initialize training state
+    key, qlocal_key, qtarget_key, discrim_key, env_key, skill_init_key = jax.random.split(key, num=6)
+
+    dummy_state = jnp.zeros((1, config.state_size))
+    dummy_embedding = jnp.zeros((1, config.embedding_size))
+    dummy_skill = jnp.zeros((1, config.skill_size))
+
+    qlocal = QNet(
+        action_size=config.action_size,
+        hidden1_size=config.policy_units,
+        hidden2_size=config.policy_units,
+        dropout_rate=config.dropout_rate
+    )
+    qlocal_params = qlocal.init(qlocal_key, dummy_state, dummy_skill, train=False)
+    qlocal_opt = optax.adam(
+        learning_rate=config.policy_lr
+    )
+    qlocal_opt_state = qlocal_opt.init(qlocal_params)
+
+    qtarget = QNet(
+        action_size=config.action_size,
+        hidden1_size=config.policy_units,
+        hidden2_size=config.policy_units,
+        dropout_rate=config.dropout_rate
+    )
+    qtarget_params = qtarget.init(qtarget_key, dummy_state, dummy_skill, train=False)
+
+    discrim = Discriminator(
+        skill_size=config.skill_size,
+        hidden1_size=config.discrim_units,
+        hidden2_size=config.discrim_units,
+        dropout_rate=config.dropout_rate
+    )
+    discrim_params = discrim.init(discrim_key, dummy_embedding, train=False)
+    discrim_opt = optax.adam(
+        learning_rate=config.discrim_lr
+    )
+    discrim_opt_state = discrim_opt.init(discrim_params)
+
+    buffer = fbx.make_item_buffer(
+        config.buffer_size,
+        config.batch_size,
+        config.batch_size,
+        add_sequences=False,
+        add_batches=True
+    )
+    buffer_state = buffer.init({
+        'obs': jnp.zeros((config.state_size,)),
+        'action': jnp.array(0, dtype=jnp.int32),
+        'skill': jnp.zeros((config.skill_size,)),
+        'next_obs': jnp.zeros((config.state_size,)),
+        'next_obs_embedding': jnp.zeros((config.embedding_size,)),
+        'done': jnp.array(False, dtype=jnp.bool),
+    })
+
+    if config.embedding_type == 'identity':
+        embedding_fn = lambda x: x
+    elif config.embedding_type == '1h':
+        embedding_fn = lambda next_obs: lunar_utils.embedding_1he(next_obs[:, 0])
+    else:
+        raise ValueError(f"Invalid embedding type: {config['embedding_type']}")
+    
+    orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+
+    if config.env_name == 'LunarLander-v2' and config.skill_size == 3 and config.embedding_type == '1h':
+        goal_skill_mtx = jnp.zeros((3, 3))
+
+        min_x = -1.
+        max_x = 1.
+        min_y = 0.
+        max_y = 1.
+        num_bins_x = num_bins_y = 50
+        bin_size_x = (max_x - min_x) / num_bins_x
+        bin_size_y = (max_y - min_y) / num_bins_y
+        visits = jnp.zeros((config.skill_size + 1, num_bins_x, num_bins_y))
+
+    # 2. Define model update functions
+    @jit
+    def update_qlocal(dropout_key, qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, obs, actions, skills, next_obs,
+                      next_obs_embeddings, dones):
+        def loss_fn(qlocal_params, obs, actions, skills, next_obs, next_obs_embeddings, dones):
+            skill_idxs = jnp.argmax(skills, axis=1)
+            skill_preds = discrim.apply(discrim_params, next_obs_embeddings, train=False)
             
-            skill_preds = self.discrim.forward(next_state_embeddings)
-            selected_probs = torch.gather(skill_preds, 1, skill_idxs)
-            rewards = torch.log(selected_probs + 1e-5) - math.log(1/self.config.skill_size)
+            selected_logits = skill_preds[jnp.arange(config.batch_size), skill_idxs]
+            selected_probs = nn.activation.softmax(selected_logits)
+            rewards = jnp.log(selected_probs + 1e-9) - jnp.log(1 / config.skill_size)
 
-            Q_targets_next = self.qtarget(next_states, skills).detach().max(1)[0].unsqueeze(1)
-            Q_targets = rewards + (self.config.gamma * Q_targets_next * ~dones)
-            Q_expected = self.qlocal(states, skills).gather(1, actions)
+            Q_target_outputs = qtarget.apply(qtarget_params, next_obs, skills, train=False)
+            Q_targets_next = jnp.max(Q_target_outputs, axis=1)
+            Q_targets = rewards + (config.gamma * Q_targets_next * ~dones)
 
-            reg_lambda = 1e-1
-            l1_reg = torch.autograd.Variable(torch.FloatTensor(1), requires_grad=True).to('cuda')
-            for W in self.qlocal.parameters():
-                l1_reg = l1_reg + W.norm(1)
+            Q_expected = qlocal.apply(qlocal_params, obs, skills, train=True, rngs={
+                'dropout': dropout_key
+            })[jnp.arange(config.batch_size), actions]
 
-            loss = F.mse_loss(Q_expected, Q_targets) + reg_lambda * l1_reg
-            self.qlocal_opt.zero_grad()
-            loss.backward()
-            self.qlocal_opt.step()
-            return loss, Q_expected, Q_targets, rewards
-        loss, Q_expected, Q_targets, rewards = _update_qlocal()
+            loss = optax.squared_error(Q_targets, Q_expected).mean()
+            q_value_mean = Q_expected.mean()
+            target_value_mean = Q_targets.mean()
+            reward_mean = rewards.mean()
+            return loss, (q_value_mean, target_value_mean, reward_mean)
 
-        self.stats.update({
-            "critic_loss": loss.item(),
-            "q_values": Q_expected.mean().item(),
-            "target_values": Q_targets.mean().item(),
-            "qlocal_grad_norm": grad_norm(self.qlocal),
-            "reward_skill": rewards.mean().item(),
-        })
+        (loss, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            qlocal_params, obs, actions, skills, next_obs, next_obs_embeddings, dones)
+        updates, qlocal_opt_state = qlocal_opt.update(grads, qlocal_opt_state)
+        qlocal_params = optax.apply_updates(qlocal_params, updates)
+
+        q_value_mean, target_value_mean, reward_mean = aux_metrics
+        qlocal_metrics = {
+            'critic_loss': loss,
+            'q_values': q_value_mean,
+            'target_values': target_value_mean,
+            'qlocal_grad_norm': grad_norm(grads),
+            'reward_skill': reward_mean
+        }
+
+        return qlocal_params, qlocal_opt_state, qlocal_metrics
+
+    @jit
+    def update_qtarget(qlocal_params, qtarget_params):
+        new_qtarget_params = optax.incremental_update(qlocal_params, qtarget_params, config.tau)
+        return new_qtarget_params
+
+    @jit
+    def update_discrim(dropout_key, discrim_params, discrim_opt_state, embeddings, skills):
+        def loss_fn(discrim_params, embeddings, skills):
+            skill_idxs = jnp.argmax(skills, axis=1)
+            skill_preds = discrim.apply(discrim_params, embeddings, train=True, rngs={
+                'dropout': dropout_key
+            })
+            skill_pred_idxs = jnp.argmax(skill_preds, axis=1)
+            
+            skill_counts = jnp.sum(skills, axis=0)
+            skill_freqs = skill_counts / skill_counts.sum()
+
+            loss = optax.softmax_cross_entropy(skill_preds, skills).mean()
+            acc = (skill_pred_idxs == skill_idxs).mean()
+            pplx = 2. ** jax.scipy.special.entr(nn.activation.softmax(skill_preds)).sum(axis=1).mean()
+            discrim_skills_pplx = 2. ** jax.scipy.special.entr(skill_freqs).mean()
+
+            return loss, (acc, pplx, discrim_skills_pplx)
+        
+        (loss, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            discrim_params, embeddings, skills)
+        updates, discrim_opt_state = discrim_opt.update(grads, discrim_opt_state)
+        discrim_params = optax.apply_updates(discrim_params, updates)
+
+        acc, pplx, discrim_skills_pplx = aux_metrics
+        discrim_metrics = {
+            'discrim_loss': loss,
+            'discrim_acc': acc,
+            'discrim_pplx': pplx,
+            'discrim_skills_pplx': discrim_skills_pplx,
+            'discrim_grad_norm': grad_norm(grads)
+        }
+
+        return discrim_params, discrim_opt_state, discrim_metrics
     
-    # @torch.compile
-    def update_qtarget(self):
-        for target_param, local_param in zip(self.qtarget.parameters(), self.qlocal.parameters()):
-            target_param.data.copy_(self.config.tau * local_param.data + (1.0 - self.config.tau) * target_param.data)
-            # new_target_param_data = self.config.tau * local_param.data + (1.0 - self.config.tau) * target_param.data
-            # target_param.data = new_target_param_data.clone().detach()
-    
-    def update_discrim(
-        self,
-        experiences: Tuple
-    ):
-        # @torch.compile
-        def _update_discrim():
-            _, _, skills, _, next_state_embeddings, _ = experiences
-            skill_preds = self.discrim.forward(next_state_embeddings)
+    # Divide frequencies by num_envs
+    config.qlocal_update_freq = math.ceil(config.qlocal_update_freq / config.num_envs)
+    config.qtarget_update_freq = math.ceil(config.qtarget_update_freq / config.num_envs)
+    config.discrim_update_freq = math.ceil(config.discrim_update_freq / config.num_envs)
+    config.vis_freq = math.ceil(config.vis_freq / config.num_envs)
+    config.save_freq = math.ceil(config.save_freq / config.num_envs)
+    config.warmup_steps = math.ceil(config.warmup_steps / config.num_envs)
 
-            col_counts = next_state_embeddings.sum(axis=0)
-            missing_classes = torch.any(col_counts < 1e-9)
-            if missing_classes:
-                return float('nan'), float('nan'), float('nan')
-            weights = 1. / (col_counts + 1e-9)
+    # 2. Run training
+    episodes = 0
+    eps = config.eps_start
+    skill_idx = random.randint(skill_init_key, minval=0, maxval=config.skill_size, shape=(config.num_envs,))
 
-            raise NotImplementedError("verify that we should cross entropy vs. softmax cross entropy for the line below")
-            loss = F.cross_entropy(skill_preds, skills, weight=weights)
-            # loss = F.cross_entropy(skill_preds, skills)
-            self.discrim_opt.zero_grad()
-            loss.backward()
-            self.discrim_opt.step()
+    if config.gym_np:
+        env = gym.vector.make(config.env_name, num_envs=config.num_envs, asynchronous=True)
+        obs = env.reset()
+        obs = jnp.array(obs)
+    else:
+        env = BatchEnvWrapper(AutoResetEnvWrapper(CraftaxClassicSymbolicEnv()), num_envs=config.num_envs)
+        env_params = env.default_params
+        obs, state = env.reset(env_key, env_params)
 
-            skill_idxs = torch.argmax(skills, dim=1, keepdim=True)
-            skill_pred_idxs = torch.argmax(skill_preds, dim=1, keepdim=True)
-            acc = torch.sum(skill_pred_idxs == skill_idxs) / skill_idxs.shape[0]
-            ent = -torch.sum(skill_preds * torch.log(skill_preds + 1e-10) / math.log(self.config.skill_size), dim=1).mean()
-            return loss, acc, ent
-        loss, acc, ent = _update_discrim()
+    for t_step in tqdm(range(config.steps // config.num_envs)):
+        key, step_key, buffer_key, skill_update_key, qlocal_dropout_key, discrim_dropout_key = random.split(key, num=6)
+        skill = jax.nn.one_hot(skill_idx, config.skill_size)
+        if t_step > config.warmup_steps:
+            eps = jnp.maximum(eps * config.eps_decay, config.eps_end)
 
-        self.stats.update({
-            "discrim_loss": loss if math.isnan(loss) else loss.item(),
-            "discrim_acc": acc if math.isnan(acc) else acc.item(),
-            "discrim_ent": ent if math.isnan(ent) else ent.item(),
-            "discrim_grad_norm": 0. if math.isnan(loss) else grad_norm(self.discrim),
+        key, action = act(key, qlocal, qlocal_params, obs, skill, config.action_size, config.num_envs, eps)
+        if config.gym_np:
+            action = onp.asarray(action)
+            next_obs, _, done, _ = env.step(action)
+            next_obs, done = jnp.array(next_obs), jnp.array(done)
+        else:
+            next_obs, next_state, _, done, _ = env.step(step_key, state, action, env_params)
+        next_obs_embedding = embedding_fn(next_obs)
+
+        episodes += jnp.sum(done)
+
+        buffer_state = buffer.add(buffer_state, {
+            'obs': obs,
+            'action': action,
+            'skill': skill,
+            'next_obs': next_obs,
+            'next_obs_embedding': next_obs_embedding,
+            'done': done,
         })
+
+        experiences = buffer.sample(buffer_state, buffer_key)
+        e_obs = experiences.experience['obs']
+        e_actions = experiences.experience['action']
+        e_skills = experiences.experience['skill']
+        e_next_obs = experiences.experience['next_obs']
+        e_next_obs_embeddings = experiences.experience['next_obs_embedding']
+        e_dones = experiences.experience['done']
+
+        metrics = {
+            't_step': t_step,
+            'steps': t_step * config.num_envs,
+            'eps': eps,
+            'episodes': episodes
+        }
+
+        if t_step > config.warmup_steps:   
+            if t_step % config.qlocal_update_freq == 0:
+                qlocal_params, qlocal_opt_state, qlocal_metrics = update_qlocal(
+                    qlocal_dropout_key, qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, e_obs, e_actions, e_skills, e_next_obs,
+                    e_next_obs_embeddings, e_dones
+                )
+                metrics.update(qlocal_metrics)
+            
+            if t_step % config.qtarget_update_freq == 0:
+                qtarget_params = update_qtarget(qlocal_params, qtarget_params)
+            
+            if t_step % config.discrim_update_freq == 0:
+                discrim_params, discrim_opt_state, discrim_metrics = update_discrim(
+                    discrim_dropout_key, discrim_params, discrim_opt_state, e_next_obs_embeddings, e_skills
+                )
+                metrics.update(discrim_metrics)
+
+            if config.env_name == 'LunarLander-v2' and config.skill_size == 3 and config.embedding_type == '1h':
+                # Visits
+                x_index = ((obs[:, 0] - min_x) / bin_size_x).astype(int)
+                x_index = jnp.minimum(jnp.maximum(x_index, jnp.zeros_like(x_index)), jnp.full_like(x_index, num_bins_x - 1))
+                y_index = ((obs[:, 1] - min_y) / bin_size_y).astype(int)
+                y_index = jnp.minimum(jnp.maximum(y_index, jnp.zeros_like(y_index)), jnp.full_like(x_index, num_bins_y - 1))
+
+                visits = visits.at[skill_idx, y_index, x_index].add(1)
+                visits = visits.at[-1, y_index, x_index].add(1)
+
+                # Goal classification
+                done_idx = jnp.argwhere(done)
+                goal_idx = lunar_utils.classify_goal(obs[done_idx, 0])
+                goal_skill_mtx = goal_skill_mtx.at[skill_idx[done_idx], goal_idx].add(1)
+
+                if t_step % config.vis_freq == 0:
+                    for i in range(config.skill_size):
+                        metrics[f"log_visits_s{i}"] = lunar_vis.plot_visits(visits[i], min_x, max_x, min_y, max_y, i, log=True)
+                    
+                    metrics.update({
+                        "log_visits_all": lunar_vis.plot_visits(visits[-1], min_x, max_x, min_y, max_y, log=True),
+                        "goal_confusion": lunar_vis.goal_skill_heatmap(goal_skill_mtx),
+                        "I(z;s)": lunar_utils.I_zs_score(goal_skill_mtx),
+                        "I(z;a)": lunar_utils.I_za_score(qlocal, qlocal_params, e_obs, e_skills, config.batch_size, config.skill_size, config.action_size),
+                        "pred_landscape": lunar_vis.plot_pred_landscape(discrim, discrim_params, embedding_fn),
+                    })
+
+                    goal_skill_mtx = jnp.zeros_like(goal_skill_mtx)
+                    visits = jnp.zeros_like(visits)
+
+        if log:
+            wandb.log(metrics, step=t_step*config.num_envs)
+
+        if t_step % config.save_freq == 0:
+            checkpoint = {'qlocal': qlocal_params, 'qtarget': qtarget_params, 'discrim': discrim_params}
+            save_args = orbax_utils.save_args_from_target(checkpoint)
+            orbax_checkpointer.save(f'./data/{run_name}/checkpoint_{t_step*config.num_envs}', checkpoint, save_args=save_args)
+
+        obs = next_obs
+        if not config.gym_np:
+            state = next_state
+        skill_idx = jnp.where(
+            done,
+            random.randint(skill_update_key, minval=0, maxval=config.skill_size, shape=(config.num_envs,)),
+            skill_idx
+        )
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', '-c', type=str, required=True)
+    parser.add_argument('--nolog', action='store_true')
+    args = parser.parse_args()
+
+    config = yaml.safe_load(Path(os.path.join('./config', args.config)).read_text())
+    if "seed" not in config:
+        config['seed'] = int(datetime.now().timestamp())
+    config = ConfigDict(config)
+
+    if not args.nolog:
+        run_name = '{}_{}_{}_{}_{}'.format(config.env_name, config.exp_type, config.skill_size, config.embedding_type, int(datetime.now().timestamp()))
+        os.makedirs(f'./data/{run_name}')
+
+        load_dotenv()
+        wandb.login(key=os.getenv("WANDB_API_KEY"))
+
+        run = wandb.init(
+            project="language-skills",
+            entity="arvind6902",
+            name=run_name,
+            config=config
+        )
+        wandb.config = config
+    else:
+        run_name = None
+
+    key = random.PRNGKey(config.seed)
+    train(key, config, run_name, log=not args.nolog)
+    run.finish()
