@@ -68,20 +68,3 @@ def I_za_score(config, agent):
     H_az = _H_az()
 
     return H_a - H_az
-
-def std_a_score(config, agent):
-    if agent.t_step == 0:
-        return 0.0
-    
-    states, _, skills_gt, _, _, _ = agent.memory.get_all()
-    states, skills_gt = to_numpy(states), to_numpy(skills_gt)
-
-    all_probs = np.empty((config.skill_size, states.shape[0], config.action_size))
-    for i in range(config.skill_size):
-        skill = np.zeros((1, config.skill_size))
-        skill[0][i] = 1.
-        skills = np.repeat(skill, states.shape[0], axis=0)
-        all_probs[i] = agent.act_probs(states, skills)
-
-    std = all_probs.std(axis=0).mean()
-    return std

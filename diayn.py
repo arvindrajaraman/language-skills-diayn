@@ -15,7 +15,7 @@ from tqdm import tqdm
 import wandb
 
 from lunarlander.captioner import naive_captioner
-from lunarlander.metrics import I_zs_confusion_matrix, I_zs_score, I_za_score, std_a_score
+from lunarlander.metrics import I_zs_confusion_matrix, I_zs_score, I_za_score
 from models import QNet, QNetConv, Discriminator, DiscriminatorConv
 from structures import ReplayBuffer
 from utils import grad_norm, to_numpy, to_torch
@@ -133,7 +133,6 @@ class DIAYN():
                     "goal_confusion_rolling": confusion_matrix_heatmap(conf_mtx),
                     "I(z;s)_rolling": I_zs_score(conf_mtx),
                     "I(z;a)_rolling": I_za_score(self.config, self),
-                    "std_a_rolling": std_a_score(self.config, self),
                 })
                 self.goal_skill_pairs.clear()
                 self.visitations = np.zeros((self.config.skill_size + 1, self.num_bins_x, self.num_bins_y))
@@ -284,6 +283,7 @@ class DIAYN():
                 return float('nan'), float('nan'), float('nan')
             weights = 1. / (col_counts + 1e-9)
 
+            raise NotImplementedError("verify that we should cross entropy vs. softmax cross entropy for the line below")
             loss = F.cross_entropy(skill_preds, skills, weight=weights)
             # loss = F.cross_entropy(skill_preds, skills)
             self.discrim_opt.zero_grad()
