@@ -5,23 +5,17 @@ from jax import jit
 import jax
 import jax.numpy as jnp
 
-@jit
 def classify_goal(x):
-    conditions = jnp.array([
-        x < -0.33,
-        (x >= -0.33) & (x < 0.33),
-        x >= 0.33
-    ])
-    choices = jnp.array([0, 1, 2])
-    return jnp.sum(conditions.T * choices, axis=1, dtype=jnp.int32)
+    result = jnp.zeros_like(x, dtype=jnp.int32)
+    result = result.at[x < -0.33].set(0)
+    result = result.at[(x >= -0.33) & (x < 0.33)].set(1)
+    result = result.at[x >= 0.33].set(2)
+    return result
 
-@jit
 def embedding_1he(x):
-    return jnp.array([
-        x < -0.33,
-        (x >= -0.33) & (x < 0.33),
-        x >= 0.33
-    ], dtype=jnp.float32).T
+    goals = classify_goal(x)
+    result = jax.nn.one_hot(goals, 3)
+    return result
     
 def normalize_freq_matrix(freq_matrix):
     if jnp.sum(freq_matrix) < 1e-9:

@@ -30,6 +30,7 @@ import wandb
 # files
 from models import QNet, Discriminator
 from utils import grad_norm
+import crafter_utils
 import lunar_utils
 import lunar_vis
 
@@ -117,9 +118,11 @@ def train(key, config, run_name, log):
     })
 
     if config.embedding_type == 'identity':
-        embedding_fn = lambda x: x
+        embedding_fn = lambda next_obs, next_state: next_obs
     elif config.embedding_type == '1h':
-        embedding_fn = lambda next_obs: lunar_utils.embedding_1he(next_obs[:, 0])
+        embedding_fn = lambda next_obs, next_state: lunar_utils.embedding_1he(next_obs[:, 0])
+    elif config.embedding_type == 'crafter':
+        embedding_fn = lambda next_obs, next_state: crafter_utils.embedding_crafter(next_obs)
     else:
         raise ValueError(f"Invalid embedding type: {config['embedding_type']}")
     
@@ -146,8 +149,9 @@ def train(key, config, run_name, log):
             skill_preds = discrim.apply(discrim_params, next_obs_embeddings, train=False)
             
             selected_logits = skill_preds[jnp.arange(config.batch_size), skill_idxs]
-            selected_probs = nn.activation.softmax(selected_logits)
-            rewards = jnp.log(selected_probs + 1e-9) - jnp.log(1 / config.skill_size)
+            rewards = jax.nn.log_softmax(selected_logits + 1e-9) - jnp.log(1 / config.skill_size)
+
+            # rewards -= reward_mean  # normalize rewards
 
             Q_target_outputs = qtarget.apply(qtarget_params, next_obs, skills, train=False)
             Q_targets_next = jnp.max(Q_target_outputs, axis=1)
@@ -157,7 +161,10 @@ def train(key, config, run_name, log):
                 'dropout': dropout_key
             })[jnp.arange(config.batch_size), actions]
 
-            loss = optax.squared_error(Q_targets, Q_expected).mean()
+            reg_penalty = 1e-1
+            reg_loss = sum(jnp.abs(w).sum() for w in jax.tree_util.tree_leaves(qlocal_params))
+
+            loss = optax.squared_error(Q_targets, Q_expected).mean() + (reg_penalty * reg_loss)
             q_value_mean = Q_expected.mean()
             target_value_mean = Q_targets.mean()
             reward_mean = rewards.mean()
@@ -231,11 +238,13 @@ def train(key, config, run_name, log):
     episodes = 0
     eps = config.eps_start
     skill_idx = random.randint(skill_init_key, minval=0, maxval=config.skill_size, shape=(config.num_envs,))
+    # reward_mean = 0.0
 
     if config.gym_np:
         env = gym.vector.make(config.env_name, num_envs=config.num_envs, asynchronous=True)
         obs = env.reset()
         obs = jnp.array(obs)
+        state, next_state = None, None
     else:
         env = BatchEnvWrapper(AutoResetEnvWrapper(CraftaxClassicSymbolicEnv()), num_envs=config.num_envs)
         env_params = env.default_params
@@ -254,7 +263,7 @@ def train(key, config, run_name, log):
             next_obs, done = jnp.array(next_obs), jnp.array(done)
         else:
             next_obs, next_state, _, done, _ = env.step(step_key, state, action, env_params)
-        next_obs_embedding = embedding_fn(next_obs)
+        next_obs_embedding = embedding_fn(next_obs, next_state)
 
         episodes += jnp.sum(done)
 
@@ -279,8 +288,19 @@ def train(key, config, run_name, log):
             't_step': t_step,
             'steps': t_step * config.num_envs,
             'eps': eps,
-            'episodes': episodes
+            'episodes': episodes,
+            # 'reward_mean': reward_mean
         }
+
+        # if t_step % 20000 == 19999:
+        #     _, _, rm_skills, _, rm_next_obs_embeddings, _ = buffer.sample(buffer_state, buffer_key, batch_size=1024)
+        #     rm_skill_idxs = jnp.argmax(rm_skills, axis=1)
+        #     skill_preds = discrim.apply(discrim_params, rm_next_obs_embeddings, train=False)
+            
+        #     selected_logits = skill_preds[jnp.arange(config.batch_size), rm_skill_idxs]
+        #     rewards = jax.nn.log_softmax(selected_logits + 1e-9) - jnp.log(1 / config.skill_size)
+        #     reward_mean = rewards.mean()
+        #     ic('Standardized rewards: mean', reward_mean)
 
         if t_step > config.warmup_steps:   
             if t_step % config.qlocal_update_freq == 0:
@@ -310,7 +330,7 @@ def train(key, config, run_name, log):
                 visits = visits.at[-1, y_index, x_index].add(1)
 
                 # Goal classification
-                done_idx = jnp.argwhere(done)
+                done_idx = jnp.argwhere(done).reshape(-1)
                 goal_idx = lunar_utils.classify_goal(obs[done_idx, 0])
                 goal_skill_mtx = goal_skill_mtx.at[skill_idx[done_idx], goal_idx].add(1)
 
@@ -331,11 +351,10 @@ def train(key, config, run_name, log):
 
         if log:
             wandb.log(metrics, step=t_step*config.num_envs)
-
-        if t_step % config.save_freq == 0:
-            checkpoint = {'qlocal': qlocal_params, 'qtarget': qtarget_params, 'discrim': discrim_params}
-            save_args = orbax_utils.save_args_from_target(checkpoint)
-            orbax_checkpointer.save(f'./data/{run_name}/checkpoint_{t_step*config.num_envs}', checkpoint, save_args=save_args)
+            if t_step % config.save_freq == 0:
+                checkpoint = {'qlocal': qlocal_params, 'qtarget': qtarget_params, 'discrim': discrim_params}
+                save_args = orbax_utils.save_args_from_target(checkpoint)
+                orbax_checkpointer.save(f'{os.getcwd()}/data/{run_name}/checkpoint_{t_step*config.num_envs}', checkpoint, save_args=save_args)
 
         obs = next_obs
         if not config.gym_np:

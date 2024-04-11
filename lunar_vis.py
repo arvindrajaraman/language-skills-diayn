@@ -49,7 +49,7 @@ def plot_pred_landscape(discrim, discrim_params, embedding_fn):
     X, Y = jnp.meshgrid(xs, ys)
     points = jnp.stack((X, Y), axis=2).reshape(-1, 2)
     points = jnp.concatenate([points, jnp.zeros((points.shape[0], 6))], axis=1)
-    embeddings = embedding_fn(points)
+    embeddings = embedding_fn(points, None)
 
     skill_logits = discrim.apply(discrim_params, embeddings, train=False).reshape((X.shape[0], X.shape[1], 3))
     skill_probs = nn.activation.softmax(skill_logits)

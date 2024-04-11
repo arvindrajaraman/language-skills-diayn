@@ -9,6 +9,25 @@ import optax
 
 # from model_utils import ResidualLayer
 
+class QNetClassic(nn.Module):
+    action_size: int
+    hidden1_size: int
+    hidden2_size: int
+    dropout_rate: float
+
+    @nn.compact
+    def __call__(self, x, train):
+        x = nn.LayerNorm()(x)
+        x = nn.Dense(features=self.hidden1_size)(x)
+        x = nn.relu(x)
+        x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+        x = nn.LayerNorm()(x)
+        x = nn.Dense(features=self.hidden2_size)(x)
+        x = nn.relu(x)
+        x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+        x = nn.Dense(features=self.action_size)(x)
+        return x
+
 class QNet(nn.Module):
     action_size: int
     hidden1_size: int
@@ -18,47 +37,50 @@ class QNet(nn.Module):
     @nn.compact
     def __call__(self, state, skill, train):
         x = jnp.concatenate((state, skill), axis=-1)
+        x = nn.LayerNorm()(x)
         x = nn.Dense(features=self.hidden1_size)(x)
         x = nn.relu(x)
-        # x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+        x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+        x = nn.LayerNorm()(x)
         x = nn.Dense(features=self.hidden2_size)(x)
         x = nn.relu(x)
-        # x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+        x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
         x = nn.Dense(features=self.action_size)(x)
         return x
     
-# class QNetConv(nn.Module):
-#     out_channels: int
-#     action_size: int
-#     hidden1_size: int
-#     hidden2_size: int
-#     dropout_rate: float
+class QNetCraftax(nn.Module):
+    action_size: int
+    hidden1_size: int
+    hidden2_size: int
+    dropout_rate: float
 
-#     res_layers: List[ResidualLayer]
+    @nn.compact
+    def __call__(self, state, skill, train):
+        maps, metadata = jnp.split(state, [7 * 9 * 21], axis=1)
+        maps = maps.reshape((-1, 7, 9, 21))
+        
+        maps = nn.Conv(features=32, kernel_size=(3, 3), padding='SAME')(maps)
+        maps = nn.relu(maps)
+        maps = nn.Dropout(rate=0.1, deterministic=not train)(maps)
+        maps = nn.max_pool(maps, window_shape=(2, 2), strides=(2, 2), padding='VALID')
+        maps = nn.Conv(features=64, kernel_size=(3, 3), padding='SAME')(maps)
+        maps = nn.relu(maps)
+        maps = nn.Dropout(rate=0.1, deterministic=not train)(maps)
+        maps = nn.max_pool(maps, window_shape=(2, 2), strides=(2, 2), padding='VALID')
+        maps_features = maps.reshape((maps.shape[0], -1))
 
-#     def setup(self):
-#         res1 = ResidualLayer(out_channels=self.out_channels,     stride=1, num_blocks=3)
-#         res2 = ResidualLayer(out_channels=self.out_channels * 2, stride=2, num_blocks=4)
-#         res3 = ResidualLayer(out_channels=self.out_channels * 4, stride=2, num_blocks=6)
-#         res4 = ResidualLayer(out_channels=self.out_channels * 8, stride=2, num_blocks=3)
-#         self.res_layers = [res1, res2, res3, res4]
-
-#     def __call__(self, state, skill, train):
-#         x = state
-#         for res_layer in self.res_layers:
-#             x = res_layer(x)
-
-#         x = nn.avg_pool(x)
-#         x = jnp.concatenate((x, skill), axis=1)
-#         x = nn.Dense(features=self.hidden1_size)(x)
-#         x = nn.relu(x)
-#         x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
-#         x = nn.Dense(features=self.hidden2_size)(x)
-#         x = nn.relu(x)
-#         x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
-#         x = nn.Dense(features=self.action_size)(x)
-
-#         return x
+        y = jnp.concatenate((maps_features, metadata, skill), axis=-1)
+        y = nn.LayerNorm()(y)
+        y = nn.Dense(self.hidden1_size)(y)
+        y = nn.relu(y)
+        y = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(y)
+        y = nn.LayerNorm()(y)
+        y = nn.Dense(self.hidden2_size)(y)
+        y = nn.relu(y)
+        y = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(y)
+        y = nn.Dense(self.action_size)(y)
+        y = nn.softmax(y)
+        return y
 
 class Discriminator(nn.Module):
     skill_size: int
@@ -68,9 +90,11 @@ class Discriminator(nn.Module):
 
     @nn.compact
     def __call__(self, x, train):
+        x = nn.LayerNorm()(x)
         x = nn.Dense(features=self.hidden1_size)(x)
         x = nn.relu(x)
         x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)
+        x = nn.LayerNorm()(x)
         x = nn.Dense(features=self.hidden2_size)(x)
         x = nn.relu(x)
         x = nn.Dropout(rate=self.dropout_rate, deterministic=not train)(x)

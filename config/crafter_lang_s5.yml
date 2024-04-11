@@ -1,11 +1,11 @@
 action_size: 17
-batch_size: 128
+batch_size: 512
 buffer_size: 10002
-discrim_lr: 0.01
+discrim_lr: 0.001
 env_name: CraftaxClassicSymbolic
 
-steps: 500000
-save_freq: 10000
+steps: 2000000
+save_freq: 50000
 vis_freq: 50000
 warmup_steps: 10000
 
@@ -13,7 +13,7 @@ eps_decay: 0.999995
 eps_start: 1.0
 eps_end: 0.01
 
-gamma: 0.7
+gamma: 0.95
 policy_lr: 0.00001
 skill_size: 5
 state_size: 1345
@@ -24,8 +24,8 @@ qtarget_update_freq: 1
 exp_type: mlp
 discrim_units: 512
 policy_units: 512
-embedding_type: naive
-embedding_size: 1345
+embedding_type: crafter
+embedding_size: 768
 device: cuda
 save_checkpoints: true
 dropout_rate: 0.2
