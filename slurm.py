@@ -22,7 +22,7 @@ if __name__ == '__main__':
     command = ' '.join(sys.argv[1:])
     timestamp = int(datetime.now().timestamp())
 
-    JOB_NAME = 'lunar_1h_sweep'
+    JOB_NAME = 'crafter_lang'
     TIME = '24:00:00'
     GPUS = 1
     GPU_SHARDS = 4

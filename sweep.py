@@ -19,7 +19,7 @@ def agent():
     config = ConfigDict(config)
 
     key = random.PRNGKey(config.seed)
-    diayn.train(key, config, None, log=False)
+    diayn.train(key, config, None, log=True)
     run.finish()
 
 if __name__ == "__main__":

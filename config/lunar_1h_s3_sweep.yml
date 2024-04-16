@@ -44,13 +44,15 @@ parameters:
   save_freq:
     value: 100000000
   vis_freq:
-    value: 100000000
+    value: 100000
   warmup_steps:
     value: 5000
   dropout_rate:
     value: 0.2
   gym_np:
     value: true
+  save_checkpoints:
+    value: false
   
   eps_decay:
     values: [0.995, 0.9995, 0.99995, 0.999995]

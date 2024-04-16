@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 from icecream import ic
+from sentence_transformers import SentenceTransformer
 
 from craftax_classic.constants import *
 
@@ -70,109 +71,63 @@ from craftax_classic.constants import *
 #             idx = (h * MAP_WIDTH * MAP_FEATURES) + (w * MAP_FEATURES) + f
 #             obs_feature_labels[idx] = f'{map_feature_name}/h{h}-w{w}'
 
-def crafter_obs_decomposed(state):
-    obs_dim_array = jnp.array([OBS_DIM[0], OBS_DIM[1]], dtype=jnp.int32)
+blocks_labels = ['invalid', 'out of bounds', 'grass', 'water', 'stone', 'tree', 'wood', 'path', 'coal', 'iron', 'diamond', 'crafting table', 'furnace', 'sand', 'lava', 'plant', 'ripe plant']
+mobs_labels = ['zombie', 'cow', 'skeleton', 'arrow']
+inventory_labels = ['wood', 'stone', 'coal', 'iron', 'diamond', 'sapling', 'wood pickaxe', 'stone pickaxe', 'iron pickaxe', 'wood sword', 'stone sword', 'iron sword']
 
-    # Map
-    padded_grid = jnp.pad(
-        state.map,
-        (MAX_OBS_DIM + 2, MAX_OBS_DIM + 2),
-        constant_values=BlockType.OUT_OF_BOUNDS.value,
-    )
+health_labels = ['very unhealthy', 'unhealthy', 'at okay health', 'healthy', 'very healthy']
+food_labels = ['very hungry', 'hungry', 'at okay hunger', 'full', 'very full']
+thirsty_labels = ['very thirsty', 'thirsty', 'at okay thirst', 'thirsty', 'very thirsty']
+energy_labels = ['very tired', 'tired', 'at okay energy', 'well-rested', 'very well-rested']
 
-    tl_corner = state.player_position - obs_dim_array // 2 + MAX_OBS_DIM + 2
+embedding_model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
 
-    map_view = jax.lax.dynamic_slice(padded_grid, tl_corner, OBS_DIM)
-    map_view_one_hot = jax.nn.one_hot(map_view, num_classes=len(BlockType))
+def embedding_crafter(next_obs):
+    batch_size = next_obs.shape[0]
+    maps, metadata = jnp.split(next_obs, [7 * 9 * 21], axis=1)
+    
+    # For each block/mob type, count how many are in frame
+    maps = jnp.reshape(maps, [-1, 7, 9, 21])
+    maps = jnp.transpose(maps, [0, 3, 1, 2])
+    maps = jnp.reshape(maps, [-1, 21, 7 * 9])
+    maps = maps.sum(axis=2)
+    maps = jnp.round(maps).astype(jnp.int32)
+    blocks, mobs = jnp.split(maps, [17], axis=1)
 
-    # Mobs
-    mob_map = jnp.zeros((*OBS_DIM, 4), dtype=jnp.uint8)  # 4 types of mobs
+    # Extract and format metadata
+    inventory, intrinsics, direction, light_level, is_sleeping = jnp.split(metadata, [12, 16, 20, 21], axis=1)
+    inventory = jnp.round(inventory * 10.0).astype(jnp.int32)
+    intrinsics *= 10.0
 
-    def _add_mob_to_map(carry, mob_index):
-        mob_map, mobs, mob_type_index = carry
+    health, food, drink, energy = jnp.split(intrinsics, [1, 2, 3], axis=1)
 
-        local_position = (
-            mobs.position[mob_index]
-            - state.player_position
-            + jnp.array([OBS_DIM[0], OBS_DIM[1]]) // 2
-        )
-        on_screen = jnp.logical_and(
-            local_position >= 0, local_position < jnp.array([OBS_DIM[0], OBS_DIM[1]])
-        ).all()
-        on_screen *= mobs.mask[mob_index]
+    # Construct embedding
+    sentences = []
+    for i in range(batch_size):
+        blocks_gt0 = jnp.argwhere(blocks[i] > 0).reshape(-1)
+        mobs_gt0 = jnp.argwhere(mobs[i] > 0).reshape(-1)
+        inventory_gt0 = jnp.argwhere(inventory[i] > 0).reshape(-1)
 
-        mob_map = mob_map.at[local_position[0], local_position[1], mob_type_index].set(
-            on_screen.astype(jnp.uint8)
-        )
+        blocks_str = 'You see the following blocks: {}.'.format(', '.join([blocks_labels[b] for b in blocks_gt0]))
+        mobs_str = 'You see the following mobs: {}.'.format(', '.join([mobs_labels[m] for m in mobs_gt0]))
+        inventory_str = 'You have in your inventory: {}.'.format(', '.join([inventory_labels[i] for i in inventory_gt0]))
 
-        return (mob_map, mobs, mob_type_index), None
+        health_str = 'Your health level is: {}.'.format(health_labels[round(health[i].item() / 2.0) - 1])
+        food_str = 'Your hunger level is: {}.'.format(food_labels[round(food[i].item() / 2.0) - 1])
+        drink_str = 'Your thirst level is: {}.'.format(thirsty_labels[round(drink[i].item() / 2.0) - 1])
+        energy_str = 'Your energy level is: {}.'.format(energy_labels[round(energy[i].item() / 2.0) - 1])
 
-    (mob_map, _, _), _ = jax.lax.scan(
-        _add_mob_to_map,
-        (mob_map, state.zombies, 0),
-        jnp.arange(state.zombies.mask.shape[0]),
-    )
-    (mob_map, _, _), _ = jax.lax.scan(
-        _add_mob_to_map, (mob_map, state.cows, 1), jnp.arange(state.cows.mask.shape[0])
-    )
-    (mob_map, _, _), _ = jax.lax.scan(
-        _add_mob_to_map,
-        (mob_map, state.skeletons, 2),
-        jnp.arange(state.skeletons.mask.shape[0]),
-    )
-    (mob_map, _, _), _ = jax.lax.scan(
-        _add_mob_to_map,
-        (mob_map, state.arrows, 3),
-        jnp.arange(state.arrows.mask.shape[0]),
-    )
+        desc = [health_str, food_str, drink_str, energy_str]
+        if len(blocks_gt0) > 0:
+            desc.append(blocks_str)
+        if len(mobs_gt0) > 0:
+            desc.append(mobs_str)
+        if len(inventory_gt0) > 0:
+            desc.append(inventory_str)
 
-    all_map = jnp.concatenate([map_view_one_hot, mob_map], axis=-1)
+        desc = ' '.join(desc)
+        sentences.append(desc)
 
-    # Inventory
-    inventory = (
-        jnp.array(
-            [
-                state.inventory.wood,
-                state.inventory.stone,
-                state.inventory.coal,
-                state.inventory.iron,
-                state.inventory.diamond,
-                state.inventory.sapling,
-                state.inventory.wood_pickaxe,
-                state.inventory.stone_pickaxe,
-                state.inventory.iron_pickaxe,
-                state.inventory.wood_sword,
-                state.inventory.stone_sword,
-                state.inventory.iron_sword,
-            ]
-        ).astype(jnp.float16)
-        / 10.0
-    )
-
-    intrinsics = (
-        jnp.array(
-            [
-                state.player_health,
-                state.player_food,
-                state.player_drink,
-                state.player_energy,
-            ]
-        ).astype(jnp.float16)
-        / 10.0
-    )
-
-    direction = jax.nn.one_hot(state.player_direction - 1, num_classes=4)
-
-    return (
-        all_map,
-        inventory,
-        intrinsics,
-        direction,
-        jnp.array([state.light_level]),
-        jnp.array([state.is_sleeping]),
-    )
-
-def embedding_crafter(next_obs, next_state):
-    all_map, inventory, intrinsics, direction, light_level, is_sleeping = crafter_obs_decomposed(next_state)
-    ic(all_map.shape, inventory.shape, intrinsics.shape, direction.shape, light_level.shape, is_sleeping.shape)
-    raise NotImplementedError
+    sentences = embedding_model.encode(sentences)
+    sentences = jnp.array(sentences)
+    return sentences

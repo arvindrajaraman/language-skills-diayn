@@ -27,7 +27,7 @@ def goal_skill_heatmap(freq_matrix):
     col_labels = [f'goal {i}' for i in range(3)]
 
     confusion_matrix = normalize_freq_matrix(freq_matrix)
-    plt.imshow(confusion_matrix, cmap='gist_heat', vmin=0.0, vmax=1.0)
+    plt.imshow(confusion_matrix, vmin=0.0, vmax=1.0)
 
     plt.xticks(jnp.arange(len(col_labels)), labels=col_labels)
     plt.yticks(jnp.arange(len(row_labels)), labels=row_labels)
@@ -49,7 +49,7 @@ def plot_pred_landscape(discrim, discrim_params, embedding_fn):
     X, Y = jnp.meshgrid(xs, ys)
     points = jnp.stack((X, Y), axis=2).reshape(-1, 2)
     points = jnp.concatenate([points, jnp.zeros((points.shape[0], 6))], axis=1)
-    embeddings = embedding_fn(points, None)
+    embeddings = embedding_fn(points)
 
     skill_logits = discrim.apply(discrim_params, embeddings, train=False).reshape((X.shape[0], X.shape[1], 3))
     skill_probs = nn.activation.softmax(skill_logits)
