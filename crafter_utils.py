@@ -1,9 +1,75 @@
 import jax
 import jax.numpy as jnp
+import chex
 from icecream import ic
 from sentence_transformers import SentenceTransformer
+from functools import partial
+from typing import Optional, Tuple, Union, Any
 
 from craftax_classic.constants import *
+from gymnax.environments import environment, spaces
+
+from crafter_constants import blocks_labels, mobs_labels, inventory_labels
+
+def separate_features_by_skill(features, skills):
+    skill_idxs = jnp.argmax(skills, axis=1)
+
+    i = jnp.argsort(skill_idxs)
+    sorted_features = features[i]
+    sorted_skill_idxs = skill_idxs[i]
+
+    changes = jnp.where(jnp.diff(sorted_skill_idxs) != 0)[0] + 1
+    grouped_features = jnp.split(sorted_features, changes)
+    return grouped_features
+
+def obs_to_features(obs):
+    maps, metadata = jnp.split(obs, [7 * 9 * 21], axis=1)
+    
+    maps = jnp.reshape(maps, [-1, 7, 9, 21])
+    maps = jnp.transpose(maps, [0, 3, 1, 2])
+    maps = jnp.reshape(maps, [-1, 21, 7 * 9])
+    maps = maps.sum(axis=2)
+
+    features = jnp.concatenate((maps, metadata), axis=-1)
+    return features
+
+class GymnaxWrapper(object):
+    """Base class for Gymnax wrappers."""
+
+    def __init__(self, env):
+        self._env = env
+
+    # provide proxy access to regular attributes of wrapped object
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+    
+class ParallelizedBatchEnvWrapper(GymnaxWrapper):
+    """Batches reset and step functions"""
+
+    def __init__(self, env: environment.Environment, num_envs: int):
+        super().__init__(env)
+
+        self.num_envs = num_envs
+
+        self.reset_fn = jax.vmap(self._env.reset, in_axes=(0, None))
+        self.step_fn = jax.vmap(self._env.step, in_axes=(0, 0, 0, None))
+
+    @partial(jax.jit, static_argnums=(0, 2))
+    def reset(
+        self, rng, params: Optional[environment.EnvParams] = None
+    ) -> Tuple[chex.Array, environment.EnvState]:
+        rng, _rng = jax.random.split(rng)
+        rngs = jax.random.split(_rng, self.num_envs)
+        obs, env_state = self.reset_fn(rngs, params)
+        return obs, env_state
+
+    @partial(jax.jit, static_argnums=(0, 4))
+    def step(self, rng, state, action, params=None):
+        rng, _rng = jax.random.split(rng)
+        rngs = jax.random.split(_rng, self.num_envs)
+        obs, state, reward, done, info = self.step_fn(rngs, state, action, params)
+
+        return obs, state, reward, done, info
 
 # OBS_SIZE = 1345
 # MAP_HEIGHT = 7
@@ -70,10 +136,6 @@ from craftax_classic.constants import *
 #             map_feature_name = map_feature_idxs[f]
 #             idx = (h * MAP_WIDTH * MAP_FEATURES) + (w * MAP_FEATURES) + f
 #             obs_feature_labels[idx] = f'{map_feature_name}/h{h}-w{w}'
-
-blocks_labels = ['invalid', 'out of bounds', 'grass', 'water', 'stone', 'tree', 'wood', 'path', 'coal', 'iron', 'diamond', 'crafting table', 'furnace', 'sand', 'lava', 'plant', 'ripe plant']
-mobs_labels = ['zombie', 'cow', 'skeleton', 'arrow']
-inventory_labels = ['wood', 'stone', 'coal', 'iron', 'diamond', 'sapling', 'wood pickaxe', 'stone pickaxe', 'iron pickaxe', 'wood sword', 'stone sword', 'iron sword']
 
 health_labels = ['very unhealthy', 'unhealthy', 'at okay health', 'healthy', 'very healthy']
 food_labels = ['very hungry', 'hungry', 'at okay hunger', 'full', 'very full']

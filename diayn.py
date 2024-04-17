@@ -8,7 +8,7 @@ import yaml
 
 from craftax_classic.envs.craftax_symbolic_env import CraftaxClassicSymbolicEnv
 from dotenv import load_dotenv
-from environment_base.wrappers import AutoResetEnvWrapper, BatchEnvWrapper
+from environment_base.wrappers import AutoResetEnvWrapper
 import flashbax as fbx
 from flax import linen as nn
 from flax.training import orbax_utils
@@ -30,6 +30,7 @@ from models import QNet, QNetCraftax, Discriminator, DiscriminatorCraftax
 from utils import grad_norm
 import crafter_constants
 import crafter_utils
+from crafter_utils import ParallelizedBatchEnvWrapper
 import crafter_vis
 import lunar_utils
 import lunar_vis
@@ -227,7 +228,7 @@ def train(key, config, run_name, log):
             'discrim_grad_norm': grad_norm(grads)
         }
 
-        return discrim_params, discrim_opt_state, discrim_metrics
+        return discrim_params, discrim_opt_state, discrim_metrics    
     #endregion
     
     # Divide frequencies by num_envs
@@ -253,7 +254,7 @@ def train(key, config, run_name, log):
         obs = jnp.array(obs)
         state, next_state = None, None
     else:
-        env = BatchEnvWrapper(AutoResetEnvWrapper(CraftaxClassicSymbolicEnv()), num_envs=config.num_envs)
+        env = ParallelizedBatchEnvWrapper(AutoResetEnvWrapper(CraftaxClassicSymbolicEnv()), num_envs=config.num_envs)
         env_params = env.default_params
         obs, state = env.reset(env_key, env_params)
 
@@ -338,50 +339,55 @@ def train(key, config, run_name, log):
                 )
                 metrics.update(discrim_metrics)
 
-            if config.env_name == 'LunarLander-v2' and config.skill_size == 3 and config.embedding_type == '1h':
-                # Visits
-                x_index = ((obs[:, 0] - min_x) / bin_size_x).astype(int)
-                x_index = jnp.minimum(jnp.maximum(x_index, jnp.zeros_like(x_index)), jnp.full_like(x_index, num_bins_x - 1))
-                y_index = ((obs[:, 1] - min_y) / bin_size_y).astype(int)
-                y_index = jnp.minimum(jnp.maximum(y_index, jnp.zeros_like(y_index)), jnp.full_like(x_index, num_bins_y - 1))
+        if config.env_name == 'LunarLander-v2' and config.skill_size == 3 and config.embedding_type == '1h':
+            # Visits
+            x_index = ((obs[:, 0] - min_x) / bin_size_x).astype(int)
+            x_index = jnp.minimum(jnp.maximum(x_index, jnp.zeros_like(x_index)), jnp.full_like(x_index, num_bins_x - 1))
+            y_index = ((obs[:, 1] - min_y) / bin_size_y).astype(int)
+            y_index = jnp.minimum(jnp.maximum(y_index, jnp.zeros_like(y_index)), jnp.full_like(x_index, num_bins_y - 1))
 
-                visits = visits.at[skill_idx, y_index, x_index].add(1)
-                visits = visits.at[-1, y_index, x_index].add(1)
+            visits = visits.at[skill_idx, y_index, x_index].add(1)
+            visits = visits.at[-1, y_index, x_index].add(1)
 
-                # Goal classification
-                goal_idx = lunar_utils.classify_goal(obs[done_idx, 0])
-                goal_skill_mtx = goal_skill_mtx.at[skill_idx[done_idx], goal_idx].add(1)
+            # Goal classification
+            goal_idx = lunar_utils.classify_goal(obs[done_idx, 0])
+            goal_skill_mtx = goal_skill_mtx.at[skill_idx[done_idx], goal_idx].add(1)
 
-                if t_step % config.vis_freq == 0:
-                    for i in range(config.skill_size):
-                        metrics[f"log_visits_s{i}"] = lunar_vis.plot_visits(visits[i], min_x, max_x, min_y, max_y, i, log=True)
-                    
-                    metrics.update({
-                        "log_visits_all": lunar_vis.plot_visits(visits[-1], min_x, max_x, min_y, max_y, log=True),
-                        "goal_confusion": lunar_vis.goal_skill_heatmap(goal_skill_mtx),
-                        "I(z;s)": lunar_utils.I_zs_score(goal_skill_mtx),
-                        "I(z;a)": lunar_utils.I_za_score(qlocal, qlocal_params, e_obs, e_skills, config.batch_size, config.skill_size, config.action_size),
-                        "pred_landscape": lunar_vis.plot_pred_landscape(discrim, discrim_params, embedding_fn),
-                    })
-
-                    goal_skill_mtx = jnp.zeros_like(goal_skill_mtx)
-                    visits = jnp.zeros_like(visits)
-            elif config.env_name == 'Craftax-Classic-Symbolic-v1':
-                # Achievement counts
-                for idx in done_idx:
-                    achievement_counts.at[skill_idx[idx]].add(state.achievements[idx])
-                    achievement_counts_total += state.achievements[idx]
-
-                for idx, label in enumerate(crafter_constants.achievement_labels):
-                    metrics[f'achievements/{label}'] = achievement_counts_total[idx]
+            if t_step % config.vis_freq == 0:
+                for i in range(config.skill_size):
+                    metrics[f"log_visits_s{i}"] = lunar_vis.plot_visits(visits[i], min_x, max_x, min_y, max_y, i, log=True)
                 
-                if t_step % config.vis_freq == 0:
-                    metrics['achievement_counts'] = crafter_vis.achievement_counts_heatmap(achievement_counts, config.skill_size)
-                    
-                    rollouts = crafter_vis.gather_rollouts(key, qlocal, qlocal_params, discrim, discrim_params, embedding_fn, config.skill_size, num_rollouts=config.rollouts_per_skill, max_steps_per_rollout=500)
-                    for idx in range(config.skill_size):
-                        for rollout_num in range(config.rollouts_per_skill):
-                            metrics[f'rollouts_skill_{idx}_num_{rollout_num}'] = rollouts[idx][rollout_num]
+                metrics.update({
+                    "log_visits_all": lunar_vis.plot_visits(visits[-1], min_x, max_x, min_y, max_y, log=True),
+                    "goal_confusion": lunar_vis.goal_skill_heatmap(goal_skill_mtx),
+                    "I(z;s)": lunar_utils.I_zs_score(goal_skill_mtx),
+                    "I(z;a)": lunar_utils.I_za_score(qlocal, qlocal_params, e_obs, e_skills, config.batch_size, config.skill_size, config.action_size),
+                    "pred_landscape": lunar_vis.plot_pred_landscape(discrim, discrim_params, embedding_fn),
+                })
+
+                goal_skill_mtx = jnp.zeros_like(goal_skill_mtx)
+                visits = jnp.zeros_like(visits)
+        elif config.env_name == 'Craftax-Classic-Symbolic-v1':
+            # Achievement counts
+            for idx in done_idx:
+                achievement_counts.at[skill_idx[idx]].add(state.achievements[idx])
+                achievement_counts_total += state.achievements[idx]
+
+            for idx, label in enumerate(crafter_constants.achievement_labels):
+                metrics[f'achievements/{label}'] = achievement_counts_total[idx]
+            
+            if t_step % config.vis_freq == 0:
+                metrics['achievement_counts'] = crafter_vis.achievement_counts_heatmap(achievement_counts, config.skill_size)
+                
+                # rollouts = crafter_vis.gather_rollouts(key, qlocal, qlocal_params, discrim, discrim_params, embedding_fn, config.skill_size, num_rollouts=config.rollouts_per_skill, max_steps_per_rollout=500)
+                # for idx in range(config.skill_size):
+                #     for rollout_num in range(config.rollouts_per_skill):
+                #         print(f'Visualizing rollout {rollout_num} of skill {idx}')
+                #         metrics[f'rollouts/skill_{idx}_num_{rollout_num}'] = rollouts[idx][rollout_num]
+
+                # _, _, _, all_next_obs, _, _ = buffer.sample(buffer_state, buffer_key, batch_size=config.buffer_size)
+                # grouped_features = crafter_utils.obs_to_features(all_next_obs)
+                # metrics['feature_divergences'] = crafter_vis.feature_divergences(grouped_features)
 
 
         if log:
@@ -427,6 +433,8 @@ if __name__ == '__main__':
         wandb.config = config
     else:
         run_name = None
+
+    print('Devices visible through JAX:', jax.devices())
 
     key = random.PRNGKey(config.seed)
     train(key, config, run_name, log=not args.nolog)

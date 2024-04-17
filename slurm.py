@@ -27,7 +27,7 @@ if __name__ == '__main__':
     GPUS = 1
     GPU_SHARDS = 4
     CPUS_PER_TASK = 1
-    MEM = '4gb'
+    MEM = '8gb'
 
     args_dict = {
         'job-name': JOB_NAME,

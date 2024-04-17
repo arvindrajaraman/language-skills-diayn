@@ -3,10 +3,10 @@
 #SBATCH --time=24:00:00
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4gb
+#SBATCH --mem=8gb
 #SBATCH --qos=high
-#SBATCH --output=slurm/1713248879-out.txt
-#SBATCH --error=slurm/1713248879-err.txt
+#SBATCH --output=slurm/1713332662-out.txt
+#SBATCH --error=slurm/1713332662-err.txt
 
 TOTAL_MEMORY=49140
 TARGET_MEMORY=3686
