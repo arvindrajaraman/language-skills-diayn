@@ -1,26 +1,31 @@
 import jax
 import jax.numpy as jnp
+import numpy as onp
 import chex
 from icecream import ic
 from sentence_transformers import SentenceTransformer
 from functools import partial
 from typing import Optional, Tuple, Union, Any
 
-from craftax_classic.constants import *
+from craftax.craftax_classic.constants import *
 from gymnax.environments import environment, spaces
+from sklearn.manifold import TSNE
 
 from crafter_constants import blocks_labels, mobs_labels, inventory_labels
 
-def separate_features_by_skill(features, skills):
-    skill_idxs = jnp.argmax(skills, axis=1)
+def crafter_score(achievement_counts, episodes):
+    achievement_success_rates = ((achievement_counts / episodes) * 100.0)
+    return onp.exp(onp.log(achievement_success_rates + 1.0).mean()) - 1.0
 
-    i = jnp.argsort(skill_idxs)
+def separate_features(features, idxs):
+    i = jnp.argsort(idxs)
     sorted_features = features[i]
-    sorted_skill_idxs = skill_idxs[i]
+    sorted_idxs = idxs[i]
 
-    changes = jnp.where(jnp.diff(sorted_skill_idxs) != 0)[0] + 1
+    changes = jnp.where(jnp.diff(sorted_idxs) != 0)[0] + 1
     grouped_features = jnp.split(sorted_features, changes)
-    return grouped_features
+    grouped_idxs = jnp.split(sorted_idxs, changes)
+    return grouped_features, grouped_idxs
 
 def obs_to_features(obs):
     maps, metadata = jnp.split(obs, [7 * 9 * 21], axis=1)
@@ -137,14 +142,10 @@ class ParallelizedBatchEnvWrapper(GymnaxWrapper):
 #             idx = (h * MAP_WIDTH * MAP_FEATURES) + (w * MAP_FEATURES) + f
 #             obs_feature_labels[idx] = f'{map_feature_name}/h{h}-w{w}'
 
-health_labels = ['very unhealthy', 'unhealthy', 'at okay health', 'healthy', 'very healthy']
-food_labels = ['very hungry', 'hungry', 'at okay hunger', 'full', 'very full']
-thirsty_labels = ['very thirsty', 'thirsty', 'at okay thirst', 'thirsty', 'very thirsty']
-energy_labels = ['very tired', 'tired', 'at okay energy', 'well-rested', 'very well-rested']
+def new_embedding_model():
+    return SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
 
-embedding_model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
-
-def embedding_crafter(next_obs):
+def embedding_crafter(embedding_model, next_obs):
     batch_size = next_obs.shape[0]
     maps, metadata = jnp.split(next_obs, [7 * 9 * 21], axis=1)
     
@@ -170,16 +171,27 @@ def embedding_crafter(next_obs):
         mobs_gt0 = jnp.argwhere(mobs[i] > 0).reshape(-1)
         inventory_gt0 = jnp.argwhere(inventory[i] > 0).reshape(-1)
 
-        blocks_str = 'You see the following blocks: {}.'.format(', '.join([blocks_labels[b] for b in blocks_gt0]))
-        mobs_str = 'You see the following mobs: {}.'.format(', '.join([mobs_labels[m] for m in mobs_gt0]))
-        inventory_str = 'You have in your inventory: {}.'.format(', '.join([inventory_labels[i] for i in inventory_gt0]))
+        blocks_str = 'You see {}.'.format(', '.join([blocks_labels[b] for b in blocks_gt0]))
+        mobs_str = 'You see {}.'.format(', '.join([mobs_labels[m] for m in mobs_gt0]))
+        inventory_str = 'You have in your inventory {}.'.format(', '.join([inventory_labels[i] for i in inventory_gt0]))
 
-        health_str = 'Your health level is: {}.'.format(health_labels[round(health[i].item() / 2.0) - 1])
-        food_str = 'Your hunger level is: {}.'.format(food_labels[round(food[i].item() / 2.0) - 1])
-        drink_str = 'Your thirst level is: {}.'.format(thirsty_labels[round(drink[i].item() / 2.0) - 1])
-        energy_str = 'Your energy level is: {}.'.format(energy_labels[round(energy[i].item() / 2.0) - 1])
+        status = []
+        if food[i].item() < 10.0 - 1e-4:
+            status.append("hungry")
+        if drink[i].item() < 10.0 - 1e-4:
+            status.append("thirsty")
+        if energy[i].item() < 10.0 - 1e-4:
+            status.append("tired")
+        status_str = 'You feel {}.'.format(', '.join(status))
 
-        desc = [health_str, food_str, drink_str, energy_str]
+        if health[i].item() < 5.0 - 1e-4:
+            health_str = 'You are at low health.'
+        elif health[i].item() < 10.0 - 1e-4:
+            health_str = 'You are at moderate health.'
+        else:
+            health_str = 'You are at full health.'
+
+        desc = [status_str, health_str]
         if len(blocks_gt0) > 0:
             desc.append(blocks_str)
         if len(mobs_gt0) > 0:
@@ -190,6 +202,22 @@ def embedding_crafter(next_obs):
         desc = ' '.join(desc)
         sentences.append(desc)
 
-    sentences = embedding_model.encode(sentences)
-    sentences = jnp.array(sentences)
-    return sentences
+    embeddings = embedding_model.encode(sentences)
+    embeddings = jnp.array(embeddings)
+    return embeddings, sentences
+
+def tsne_embeddings(embeddings):
+    print('Running t-SNE')
+    return TSNE(verbose=1).fit_transform(embeddings)
+
+def bin_timesteps(timesteps):
+    bins = jnp.empty_like(timesteps, dtype=jnp.int32)
+    bins = bins.at[(timesteps < 50)].set(0)
+    bins = bins.at[(timesteps >= 50) & (timesteps < 100)].set(1)
+    bins = bins.at[(timesteps >= 100) & (timesteps < 150)].set(2)
+    bins = bins.at[(timesteps >= 150) & (timesteps < 200)].set(3)
+    bins = bins.at[(timesteps >= 200) & (timesteps < 250)].set(4)
+    bins = bins.at[(timesteps >= 250) & (timesteps < 300)].set(5)
+    bins = bins.at[(timesteps >= 300) & (timesteps < 400)].set(6)
+    bins = bins.at[(timesteps >= 400)].set(7)
+    return bins

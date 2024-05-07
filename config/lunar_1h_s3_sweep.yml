@@ -32,41 +32,37 @@ parameters:
   eps_end:
     value: 0.01
   steps:
-    value: 500000
-  log_freq:
-    value: 50000
+    value: 800000
   discrim_units:
-    value: 1024
+    value: 256
   policy_units:
-    value: 1024
-  num_envs:
-    value: 5
+    value: 256
   save_freq:
-    value: 100000000
+    value: 200000
   vis_freq:
-    value: 100000
+    value: 50000
   warmup_steps:
     value: 5000
-  dropout_rate:
-    value: 0.2
   gym_np:
     value: true
   save_checkpoints:
     value: false
-  
-  eps_decay:
-    values: [0.995, 0.9995, 0.99995, 0.999995]
-  gamma:
-    values: [0.9, 0.95, 0.99]
-  policy_lr:
-    values: [0.00001, 0.0001, 0.001, 0.01, 0.1]
-  discrim_lr:
-    values: [0.00001, 0.0001, 0.001, 0.01, 0.1]
-  discrim_update_freq:
-    values: [1, 2, 4, 8]
-  qlocal_update_freq:
-    values: [1, 2, 4, 8]
-  qtarget_update_freq:
-    values: [1, 2, 4, 8]
+  save_rollouts:
+    value: false
   tau:
-    values: [0.01, 0.001, 0.0001]
+    value: 0.001
+  max_steps_per_ep:
+    value: 1000
+  eps_decay:
+    value: 0.99995
+  gamma:
+    value: 0.95
+  
+  policy_lr:
+    values: [0.0005, 0.0001, 0.005, 0.001, 0.05, 0.01]
+  discrim_lr:
+    values: [0.0005, 0.0001, 0.005, 0.001, 0.05, 0.01]
+  discrim_update_freq:
+    values: [2, 4, 8, 16]
+  q_update_freq:
+    values: [2, 4, 8, 16]

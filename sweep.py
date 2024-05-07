@@ -6,7 +6,8 @@ import os
 import wandb
 from jax import random
 
-import diayn
+# import diayn
+import dqn
 
 def agent():
     run = wandb.init(
@@ -19,7 +20,8 @@ def agent():
     config = ConfigDict(config)
 
     key = random.PRNGKey(config.seed)
-    diayn.train(key, config, None, log=True)
+    # diayn.train(key, config, None, log=True)
+    dqn.train(key, config, None, log=True)
     run.finish()
 
 if __name__ == "__main__":

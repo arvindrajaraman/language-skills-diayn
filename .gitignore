@@ -3,6 +3,7 @@ wandb/
 data/
 slurm/*.out
 slurm/*.txt
+video_buffer/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
