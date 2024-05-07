@@ -8,12 +8,10 @@ steps: 1000000
 max_steps_per_ep: 1000
 save_freq: 250000
 vis_freq: 250000
-# warmup_steps: 10000
-warmup_steps: 0
+warmup_steps: 10000
 rollouts_per_skill: 3
 save_checkpoints: true
-# save_rollouts: true
-save_rollouts: false
+save_rollouts: true
 
 eps_decay: 0.999997
 eps_start: 1.0
