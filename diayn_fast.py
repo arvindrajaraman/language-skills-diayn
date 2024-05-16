@@ -58,31 +58,31 @@ def train(key, config, run_name, log):
     discrim_opt = optax.adam(learning_rate=config.discrim_lr)
     discrim_opt_state = discrim_opt.init(discrim_params)
 
-    # buffer = ReplayBuffer.create({
-    #     'obs': onp.zeros((config.state_size,)),
-    #     'action': onp.array(0, dtype=onp.int32),
-    #     'skill': onp.zeros((config.skill_size,)),
-    #     'reward_gt': onp.array(0.0),
-    #     'next_obs': onp.zeros((config.state_size,)),
-    #     'next_obs_embedding': onp.zeros((config.embedding_size,)),
-    #     'done': onp.array(False, dtype=onp.bool_),
-    # }, size=config.buffer_size)
-    buffer = fbx.make_item_buffer(
-        config.buffer_size,
-        config.batch_size,
-        config.batch_size,
-        add_sequences=False,
-        add_batches=True
-    )
-    buffer_state = buffer.init({
-        'obs': jnp.zeros((config.state_size,)),
-        'action': jnp.array(0, dtype=jnp.int32),
-        'skill': jnp.zeros((config.skill_size,)),
-        'reward_gt': jnp.array(0.0),
-        'next_obs': jnp.zeros((config.state_size,)),
-        'next_obs_embedding': jnp.zeros((config.embedding_size,)),
-        'done': jnp.array(False, dtype=jnp.bool_),
-    })
+    buffer = ReplayBuffer.create({
+        'obs': onp.zeros((config.state_size,)),
+        'action': onp.array(0, dtype=onp.int32),
+        'skill': onp.zeros((config.skill_size,)),
+        'reward_gt': onp.array(0.0),
+        'next_obs': onp.zeros((config.state_size,)),
+        'next_obs_embedding': onp.zeros((config.embedding_size,)),
+        'done': onp.array(False, dtype=onp.bool_),
+    }, size=config.buffer_size)
+    # buffer = fbx.make_item_buffer(
+    #     config.buffer_size,
+    #     config.batch_size,
+    #     config.batch_size,
+    #     add_sequences=False,
+    #     add_batches=True
+    # )
+    # buffer_state = buffer.init({
+    #     'obs': jnp.zeros((config.state_size,)),
+    #     'action': jnp.array(0, dtype=jnp.int32),
+    #     'skill': jnp.zeros((config.skill_size,)),
+    #     'reward_gt': jnp.array(0.0),
+    #     'next_obs': jnp.zeros((config.state_size,)),
+    #     'next_obs_embedding': jnp.zeros((config.embedding_size,)),
+    #     'done': jnp.array(False, dtype=jnp.bool_),
+    # })
 
     if config.embedding_type == 'identity':
         embedding_fn = lambda next_obs: (next_obs, None)
@@ -139,33 +139,31 @@ def train(key, config, run_name, log):
         metrics['eps'] = eps
         metrics['episodes'] = episodes
 
-        buffer_state = buffer_add(buffer_state, {
-            'obs': obs,
-            'action': action,
-            'skill': skill,
-            'reward_gt': reward_gt,
-            'next_obs': next_obs,
-            'next_obs_embedding': next_obs_embedding,
-            'done': done,
-        })
-        # buffer.add_transition_batch({
+        # buffer_state = buffer_add(buffer_state, {
         #     'obs': obs,
         #     'action': action,
         #     'skill': skill,
         #     'reward_gt': reward_gt,
         #     'next_obs': next_obs,
         #     'next_obs_embedding': next_obs_embedding,
-        #     'done': done
-        # }, batch_size=config.vectorization)
+        #     'done': done,
+        # })
+        buffer.add_transition_batch({
+            'obs': obs,
+            'action': action,
+            'skill': skill,
+            'reward_gt': reward_gt,
+            'next_obs': next_obs,
+            'next_obs_embedding': next_obs_embedding,
+            'done': done
+        }, batch_size=config.vectorization)
 
         if t_step > config.warmup_steps:
-            # for _ in range(model_updates_per_iter):
-            #     # batch = buffer.sample(config.batch_size)
-            #     key, buffer_key = random.split(key)
-            #     batch = buffer.sample(buffer_state, buffer_key).experience
-            #     policy_params, policy_opt_state, discrim_params, discrim_opt_state, model_metrics = diayn_utils.dqn_update_model(policy, policy_params, policy_opt, policy_opt_state, discrim, discrim_params, discrim_opt, discrim_opt_state, config.batch_size, config.skill_size, config.gamma, config.tau, config.reward_pr_coeff, config.reward_gt_coeff, batch)
-            # metrics.update(model_metrics)
-            key, policy_params, policy_opt_state, discrim_params, discrim_opt_state, model_metrics = diayn_utils.dqn_update_model_many(key, policy, policy_params, policy_opt, policy_opt_state, discrim, discrim_params, discrim_opt, discrim_opt_state, config.batch_size, config.skill_size, config.gamma, config.tau, config.reward_pr_coeff, config.reward_gt_coeff, buffer, buffer_state)
+            for _ in range(model_updates_per_iter):
+                batch = buffer.sample(config.batch_size)
+                # key, buffer_key = random.split(key)
+                # batch = buffer.sample(buffer_state, buffer_key).experience
+                policy_params, policy_opt_state, discrim_params, discrim_opt_state, model_metrics = diayn_utils.dqn_update_model(policy, policy_params, policy_opt, policy_opt_state, discrim, discrim_params, discrim_opt, discrim_opt_state, config.batch_size, config.skill_size, config.gamma, config.tau, config.reward_pr_coeff, config.reward_gt_coeff, batch)
             metrics.update(model_metrics)
 
             action_skill_mtx[skill_idx, action] += 1

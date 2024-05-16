@@ -107,16 +107,3 @@ def dqn_update_model(policy, policy_params, policy_opt, policy_opt_state, discri
 
     policy_params = qlocal_params, qtarget_params
     return policy_params, policy_opt_state, discrim_params, discrim_opt_state, model_metrics
-
-@partial(jit, static_argnames=('policy', 'policy_opt', 'discrim', 'discrim_opt', 'batch_size', 'skill_size', 'gamma', 'tau', 'reward_pr_coeff', 'reward_gt_coeff', 'model_updates_per_iter', 'buffer'))
-def dqn_update_model_many(key, policy, policy_params, policy_opt, policy_opt_state, discrim, discrim_params,
-                     discrim_opt, discrim_opt_state, batch_size, skill_size, gamma, tau,
-                     reward_pr_coeff, reward_gt_coeff, model_updates_per_iter, buffer, buffer_state):
-    def body(i, val):
-        key, policy_params, policy_opt_state, discrim_params, discrim_opt_state, _ = val
-        key, buffer_key = random.split(key)
-        batch = buffer.sample(buffer_state, buffer_key).experience
-        policy_params, policy_opt_state, discrim_params, discrim_opt_state, model_metrics = diayn_utils.dqn_update_model()
-        return key, policy_params, policy_opt_state, discrim_params, discrim_opt_state, model_metrics
-    
-    return jax.lax.fori_loop(0, model_updates_per_iter, body, (policy_params, policy_opt_state, discrim_params, discrim_opt_state, model_metrics))
