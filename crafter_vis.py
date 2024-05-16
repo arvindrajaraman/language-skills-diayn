@@ -22,6 +22,7 @@ def action_skill_heatmap(freq_matrix):
     row_labels = [f'skill {i}' for i in range(3)]
     col_labels = action_names
 
+    plt.figure(figsize=(4, 7))
     plt.imshow(freq_matrix)
     plt.xticks(jnp.arange(len(col_labels)), labels=col_labels)
     plt.yticks(jnp.arange(len(row_labels)), labels=row_labels)
@@ -41,7 +42,7 @@ def achievement_counts_heatmap(achievement_counts, skill_size):
 
     skill_labels = [f'Skill {i}' for i in range(skill_size)]
 
-    plt.figure(figsize=(4, 7))
+    plt.figure(figsize=(6, 9))
     plt.imshow(achievement_counts.T)
     plt.xticks(range(skill_size), skill_labels, rotation=45)
     plt.yticks(range(len(achievement_labels)), achievement_labels)

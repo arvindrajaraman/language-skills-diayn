@@ -9,12 +9,12 @@ import yaml
 
 from craftax.craftax_env import make_craftax_env_from_name
 from dotenv import load_dotenv
+import flashbax as fbx
 from flax import linen as nn
-from flax.training import checkpoints
 from functools import partial
 import gym
 from icecream import ic
-from jax import random, jit
+from jax import random, jit, vmap, pmap
 import jax
 import jax.numpy as jnp
 import jax.lax as lax
@@ -35,11 +35,6 @@ import lunar_vis
 #endregion
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-@partial(jit, static_argnames=('discrim'))
-def discriminate(discrim, discrim_params, state_embedding):
-    skill_logits = discrim.apply(discrim_params, state_embedding)
-    return skill_logits
 
 def train(key, config, run_name, log):
     #region 1. Initialize training state
@@ -81,12 +76,12 @@ def train(key, config, run_name, log):
     # discrim_params = checkpoints.restore_checkpoint(os.path.join(os.getcwd(), 'data', 'perfect_discrim'), target=None)['discrim_params']
 
     buffer = ReplayBuffer.create({
-        'obs': onp.zeros((config.state_size,)),
-        'action': onp.zeros((1,), dtype=onp.int32),
-        'skill': onp.zeros((config.skill_size,)),
-        'next_obs': onp.zeros((config.state_size,)),
-        'next_obs_embedding': onp.zeros((config.embedding_size,)),
-        'done': onp.zeros((1,)),
+        'obs': jnp.zeros((config.state_size,)),
+        'action': jnp.array(0, dtype=jnp.int32),
+        'skill': jnp.zeros((config.skill_size,)),
+        'next_obs': jnp.zeros((config.state_size,)),
+        'next_obs_embedding': jnp.zeros((config.embedding_size,)),
+        'done': jnp.array(False, dtype=jnp.bool_),
     }, size=config.buffer_size)
 
     if config.embedding_type == 'identity':
@@ -101,7 +96,7 @@ def train(key, config, run_name, log):
 
     action_skill_mtx = onp.zeros((config.skill_size, config.action_size))
     if config.env_name == 'LunarLander-v2' and config.skill_size == 3 and config.embedding_type == '1h':
-        skill_goal_mtx = onp.zeros((3, 3))
+        goal_skill_mtx = onp.zeros((3, 3))
         min_x = -1.
         max_x = 1.
         min_y = 0.
@@ -123,26 +118,26 @@ def train(key, config, run_name, log):
     def act(key, qlocal_params, obs, skill, eps=0.0):
         key, explore_key, action_key = random.split(key, num=3)
         action = jnp.where(
-            random.uniform(explore_key) > eps,
-            jnp.argmax(qlocal.apply(qlocal_params, obs, skill)),
-            random.choice(action_key, jnp.arange(config.action_size), shape=(1,))
+            random.uniform(explore_key, shape=(config.num_workers,)) > eps,
+            jnp.argmax(qlocal.apply(qlocal_params, obs, skill), axis=1),
+            random.choice(action_key, jnp.arange(config.action_size), shape=(config.num_workers,))
         )
         return key, action
 
     @jit
-    def update_q(qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, batch):
-        def loss_fn(qlocal_params, batch):
+    def update_model(qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, batch):
+        def q_loss_fn(qlocal_params, batch):
             obs, actions, skills, next_obs, next_obs_embeddings, dones = batch['obs'], batch['action'], batch['skill'], batch['next_obs'], batch['next_obs_embedding'], batch['done']
 
             skill_idxs = jnp.argmax(skills, axis=1)
             skill_preds = jax.nn.log_softmax(discrim.apply(discrim_params, next_obs_embeddings), axis=1)
             
             selected_logits = skill_preds[jnp.arange(config.batch_size), skill_idxs]
-            rewards = (selected_logits + jnp.log(config.skill_size)).reshape(-1, 1)
+            rewards = (selected_logits + jnp.log(config.skill_size))
 
-            Q_targets_next = qtarget.apply(qtarget_params, next_obs, skills).max(axis=1).reshape(-1, 1)
-            Q_targets = rewards + (config.gamma * Q_targets_next * (1.0 - dones))
-            Q_expected = qlocal.apply(qlocal_params, obs, skills)[jnp.arange(config.batch_size), actions.reshape(-1)].reshape(-1, 1)
+            Q_targets_next = qtarget.apply(qtarget_params, next_obs, skills).max(axis=1)
+            Q_targets = rewards + (config.gamma * Q_targets_next * ~dones)
+            Q_expected = qlocal.apply(qlocal_params, obs, skills)[jnp.arange(config.batch_size), actions]
 
             loss = optax.squared_error(Q_targets, Q_expected).mean()
 
@@ -151,97 +146,74 @@ def train(key, config, run_name, log):
             reward_mean = rewards.mean()
             return loss, (q_value_mean, target_value_mean, reward_mean)
 
-        (loss, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qlocal_params, batch)
-        updates, qlocal_opt_state = qlocal_opt.update(grads, qlocal_opt_state)
-        qlocal_params = optax.apply_updates(qlocal_params, updates)
-
-        q_value_mean, target_value_mean, reward_mean = aux_metrics
-        qlocal_metrics = {
-            'critic_loss': loss,
-            'q_values': q_value_mean,
-            'target_values': target_value_mean,
-            'qlocal_grad_norm': grad_norm(grads),
-            'reward': reward_mean
-        }
-        
-        # Update target network
+        (q_loss, (q_value_mean, target_value_mean, reward_mean)), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(qlocal_params, batch)
+        qlocal_updates, qlocal_opt_state = qlocal_opt.update(q_grads, qlocal_opt_state)
+        qlocal_params = optax.apply_updates(qlocal_params, qlocal_updates)
         qtarget_params = optax.incremental_update(qlocal_params, qtarget_params, config.tau)
 
-        return qlocal_params, qlocal_opt_state, qtarget_params, qlocal_metrics
-
-    @jit
-    def update_discrim(discrim_params, discrim_opt_state, batch):
-        def loss_fn(discrim_params, batch):
+        def discrim_loss_fn(discrim_params, batch):
             next_obs_embeddings, skills = batch['next_obs_embedding'], batch['skill']
 
             skill_idxs = jnp.argmax(skills, axis=1)
             skill_preds = discrim.apply(discrim_params, next_obs_embeddings)
             skill_pred_idxs = jnp.argmax(skill_preds, axis=1)
-            
-            skill_counts = jnp.sum(skills, axis=0, dtype=jnp.int32)
-            skill_freqs = skill_counts / skill_counts.sum()
-            skill_weights = jnp.where(
-                skill_freqs == 0,
-                0.0,
-                jnp.reciprocal(skill_freqs)
-            )[skill_idxs]
 
-            loss = (optax.softmax_cross_entropy(skill_preds, skills) * skill_weights).mean()
+            loss = optax.softmax_cross_entropy(skill_preds, skills).mean()
             acc = (skill_pred_idxs == skill_idxs).mean()
             pplx = 2. ** jax.scipy.special.entr(nn.activation.softmax(skill_preds)).sum(axis=1).mean()
-            discrim_skills_ent = jax.scipy.special.entr(skill_freqs).mean()
 
-            # correct_counts = jax.lax.slice(
-            #     jnp.bincount(
-            #         jnp.where(skill_pred_idxs == skill_idxs, skill_pred_idxs, config.skill_size),
-            #         skill_pred_idxs,
-            #         length=config.skill_size+1
-            #     ),
-            #     start_indices=(0,),
-            #     limit_indices=(config.skill_size,)
-            # )
-            # acc_by_skill = jnp.where(
-            #     skill_counts == 0,
-            #     jnp.zeros_like(correct_counts),
-            #     jnp.true_divide(correct_counts, skill_counts)
-            # )
-
-            return loss, (acc, pplx, discrim_skills_ent)
+            return loss, (acc, pplx)
         
-        (loss, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(discrim_params, batch)
-        updates, discrim_opt_state = discrim_opt.update(grads, discrim_opt_state)
-        discrim_params = optax.apply_updates(discrim_params, updates)
+        (discrim_loss, (discrim_acc, discrim_pplx)), discrim_grads = jax.value_and_grad(discrim_loss_fn, has_aux=True)(discrim_params, batch)
+        discrim_updates, discrim_opt_state = discrim_opt.update(discrim_grads, discrim_opt_state)
+        discrim_params = optax.apply_updates(discrim_params, discrim_updates)
 
-        acc, pplx, discrim_skills_ent = aux_metrics
-        discrim_metrics = {
-            'discrim_loss': loss,
-            'discrim_acc': acc,
-            'discrim_pplx': pplx,
-            'discrim_skills_ent': discrim_skills_ent,
-            'discrim_grad_norm': grad_norm(grads)
+        model_metrics = {
+            'critic_loss': q_loss,
+            'q_values': q_value_mean,
+            'target_values': target_value_mean,
+            'qlocal_grad_norm': grad_norm(q_grads),
+            'reward': reward_mean,
+
+            'discrim_loss': discrim_loss,
+            'discrim_acc': discrim_acc,
+            'discrim_pplx': discrim_pplx,
+            'discrim_grad_norm': grad_norm(discrim_grads)
         }
-
-        return discrim_params, discrim_opt_state, discrim_metrics    
+        return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, model_metrics
     #endregion
 
     # 2. Run training
     if config.gym_np:
-        env = gym.make(config.env_name)
+        env = gym.vector.make(config.env_name, num_envs=config.num_workers)
         obs = jnp.array(env.reset())
+        env_reset = env.reset
+        env_step = env.step
         state, next_state = None, None
     else:
-        env = make_craftax_env_from_name(config.env_name, auto_reset=False)
+        env = make_craftax_env_from_name(config.env_name, auto_reset=True)
         env_params = env.default_params
-        obs, state = env.reset(env_key, env_params)
+        env_reset = pmap(env.reset, in_axes=(0, None))
+        env_step = pmap(env.step, in_axes=(0, 0, 0, None))
+        obs, state = env_reset(random.split(env_key, config.num_workers), env_params)
+        print(vars(state))
+        raise NotImplementedError
+
+    # Divide frequencies/steps by num_workers
+    config.steps = math.ceil(config.steps / config.num_workers)
+    config.warmup_steps = math.ceil(config.warmup_steps / config.num_workers)
+    config.save_freq = math.ceil(config.save_freq / config.num_workers)
+    config.vis_freq = math.ceil(config.vis_freq / config.num_workers)
+    config.model_update_freq = math.ceil(config.model_update_freq / config.num_workers)
+
+    score_gt = jnp.zeros((config.num_workers,))
+    score_pr = jnp.zeros((config.num_workers,))
+    steps_per_ep = jnp.zeros((config.num_workers,), dtype=jnp.int32)
+    skill_idx = random.randint(skill_init_key, minval=0, maxval=config.skill_size, shape=(config.num_workers,))
 
     eps = config.eps_start
-    skill_idx = random.randint(skill_init_key, minval=0, maxval=config.skill_size, shape=(1,)).item()
-    skill = jax.nn.one_hot(skill_idx, config.skill_size)
-    score_gt = 0.0  # ground truth reward
     score_gt_window = deque(maxlen=100)
-    score_pr = 0.0  # pseudo-reward from discriminator logits
     score_pr_window = deque(maxlen=100)
-    steps_per_ep = 0
     episodes = 0
 
     score_gt_window_by_skill = []
@@ -250,73 +222,71 @@ def train(key, config, run_name, log):
         score_gt_window_by_skill.append(deque(maxlen=100))
         score_pr_window_by_skill.append(deque(maxlen=100))
 
-    for t_step in tqdm(range(config.steps)):
-        key, step_key = random.split(key)
-        key, action = act(key, qlocal_params, obs.reshape(1, -1), skill.reshape(1, -1), eps)
+    metrics = dict()
+    for t_step in tqdm(range(config.steps), unit_scale=config.num_workers):
+        skill = jax.nn.one_hot(skill_idx, config.skill_size)
+        key, action = act(key, qlocal_params, obs, skill, eps)
         if config.gym_np:
-            next_obs, reward_gt, done, _ = env.step(action.item())
+            action = onp.asarray(action)
+            next_obs, reward_gt, done, _ = env_step(action)
+            next_obs, reward_gt, done = jnp.array(next_obs), jnp.array(reward_gt), jnp.array(done)
         else:
-            next_obs, next_state, reward_gt, done, _ = env.step(step_key, state, action.item(), env_params)
-        next_obs_embedding = embedding_fn(next_obs.reshape(1, -1))[0].reshape(-1)
-        reward_pr = jax.nn.log_softmax(
-            discriminate(discrim, discrim_params, next_obs_embedding.reshape(1, -1))
-        )[skill_idx] - jnp.log(1 / config.skill_size)
+            key, step_key = random.split(key)
+            next_obs, next_state, reward_gt, done, _ = env_step(random.split(step_key, config.num_workers), state, action, env_params)
+        next_obs_embedding, _ = embedding_fn(next_obs)
+        reward_pr = jax.nn.log_softmax(discrim.apply(discrim_params, next_obs_embedding), axis=1)[jnp.arange(config.num_workers), skill_idx] - jnp.log(1 / config.skill_size)
+        done_idx = jnp.argwhere(
+            jnp.logical_or(done, steps_per_ep >= config.max_steps_per_ep)
+        )
 
         steps_per_ep += 1
         score_gt += reward_gt
         score_pr += reward_pr
-
-        metrics = {
-            'steps': t_step,
-            'eps': eps,
-            'episodes': episodes
-        }
-        
-        if done or steps_per_ep >= config.max_steps_per_ep:
-            score_gt_window.append(score_gt)
-            score_gt_window_by_skill[skill_idx].append(score_gt)
-            score_pr_window.append(score_pr)
-            score_pr_window_by_skill[skill_idx].append(score_pr)
+        for idx in done_idx:
+            skill_idx_done = skill_idx[idx].item()
             episodes += 1
+            score_gt_window.append(score_gt)
             metrics['score/gt'] = jnp.mean(jnp.array(score_gt_window))
-            metrics[f'score/gt_s{skill_idx}'] = jnp.mean(jnp.array(score_gt_window_by_skill[skill_idx]))
-            score_pr /= steps_per_ep
+            score_gt_window_by_skill[skill_idx_done].append(score_gt)
+            metrics[f'score/gt_s{skill_idx_done}'] = jnp.mean(jnp.array(score_gt_window_by_skill[skill_idx_done]))
+            score_pr_window.append(score_pr)
             metrics['score/pr'] = jnp.mean(jnp.array(score_pr_window))
-            metrics[f'score/pr_s{skill_idx}'] = jnp.mean(jnp.array(score_pr_window_by_skill[skill_idx]))
-            metrics[f'steps_per_ep'] = steps_per_ep
+            score_pr_window_by_skill[skill_idx_done].append(score_pr)
+            metrics[f'score/pr_s{skill_idx_done}'] = jnp.mean(jnp.array(score_pr_window_by_skill[skill_idx_done]))
+            metrics[f'steps_per_ep'] = steps_per_ep[idx].item()
+        metrics['steps'] = t_step * config.num_workers
+        metrics['eps'] = eps
+        metrics['episodes'] = episodes
 
-        buffer.add_transition({
+        buffer.add_transition_batch({
             'obs': obs,
             'action': action,
             'skill': skill,
             'next_obs': next_obs,
             'next_obs_embedding': next_obs_embedding,
             'done': done
-        })
+        }, batch_size=config.num_workers)
 
         if t_step > config.warmup_steps:
             batch = buffer.sample(config.batch_size)
-            if t_step % config.q_update_freq == 0:
-                qlocal_params, qlocal_opt_state, qtarget_params, qlocal_metrics = update_q(qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, batch)
-                metrics.update(qlocal_metrics)
-            if t_step % config.discrim_update_freq == 0:
-                discrim_params, discrim_opt_state, discrim_metrics = update_discrim(discrim_params, discrim_opt_state, batch)
-                metrics.update(discrim_metrics)
+            if t_step % config.model_update_freq == 0:
+                qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, model_metrics = update_model(qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, batch)
+                metrics.update(model_metrics)
 
-            action_skill_mtx[skill_idx, action.item()] += 1
+            action_skill_mtx[skill_idx, action] += 1
             if config.env_name == 'LunarLander-v2' and config.skill_size == 3 and config.embedding_type == '1h':
                 # Visits
-                x_index = int((obs[0] - min_x) / bin_size_x)
-                x_index = min(max(x_index, 0), num_bins_x - 1)
-                y_index = int((obs[1] - min_y) / bin_size_y)
-                y_index = min(max(y_index, 0), num_bins_y - 1)
+                x_index = ((obs[:, 0] - min_x) / bin_size_x).astype(int)
+                x_index = onp.minimum(onp.maximum(x_index, 0), num_bins_x - 1)
+                y_index = ((obs[:, 1] - min_y) / bin_size_y).astype(int)
+                y_index = onp.minimum(onp.maximum(y_index, 0), num_bins_y - 1)
                 visits[skill_idx, y_index, x_index] += 1
                 visits[-1, y_index, x_index] += 1
 
                 # Goal classification
-                if done:
-                    goal_idx = lunar_utils.classify_goal(jnp.array(obs[0]).reshape(1, 1))
-                    skill_goal_mtx[skill_idx, goal_idx] += 1
+                for idx in done_idx:
+                    goal_idx = lunar_utils.classify_goal(obs[idx, 0])
+                    goal_skill_mtx[skill_idx[idx].item(), goal_idx] += 1
 
                 if (t_step % config.vis_freq == 10 or t_step == config.steps - 1):
                     for i in range(config.skill_size):
@@ -333,6 +303,7 @@ def train(key, config, run_name, log):
 
                     if config.save_rollouts:
                         print('Saving rollouts...')
+                        raise NotImplementedError("need to fix gather_rollouts_by_skill impl for diayn.py")
                         rollouts = lunar_vis.gather_rollouts_by_skill(qlocal, qlocal_params, discrim, discrim_params, embedding_fn, config.skill_size, config.rollouts_per_skill, config.max_steps_per_ep)
                         for idx in range(config.skill_size):
                             for rollout_num in range(config.rollouts_per_skill):
@@ -344,15 +315,16 @@ def train(key, config, run_name, log):
                     visits = onp.zeros_like(visits)
             elif config.env_name == 'Craftax-Classic-Symbolic-v1':
                 # Achievement counts
-                if done:
-                    achievement_counts[skill_idx] += onp.clip(state.achievements, a_min=0, a_max=1)
-                    achievement_counts_total += onp.clip(state.achievements, a_min=0, a_max=1)
-                    for idx, label in enumerate(crafter_constants.achievement_labels):
-                        metrics[f'achievements/{label}'] = achievement_counts_total[idx] / episodes
-                    metrics['score/crafter'] = crafter_utils.crafter_score(achievement_counts_total, episodes)
-                    metrics[f'score/crafter_s{skill_idx}'] = crafter_utils.crafter_score(achievement_counts, episodes / config.skill_size)
+                for idx in done_idx:
+                    achievement_counts[skill_idx] += state.achievements[idx]
+                    achievement_counts_total += state.achievements[idx]
+        
+                for idx, label in enumerate(crafter_constants.achievement_labels):
+                    metrics[f'achievements/{label}'] = achievement_counts_total[idx] / episodes
+                metrics['score/crafter'] = crafter_utils.crafter_score(achievement_counts_total, episodes)
+                metrics[f'score/crafter_s{skill_idx}'] = crafter_utils.crafter_score(achievement_counts, episodes / config.skill_size)
                 
-                if (t_step % config.vis_freq == 100 or t_step == config.steps - 1):
+                if (t_step % config.vis_freq == 10 or t_step == config.steps - 1):
                     metrics['achievement_counts'] = crafter_vis.achievement_counts_heatmap(achievement_counts, config.skill_size)
                     metrics['achievement_counts_log'] = crafter_vis.achievement_counts_heatmap(
                         jnp.where(achievement_counts > 0, jnp.log(achievement_counts), 0), config.skill_size)
@@ -366,10 +338,10 @@ def train(key, config, run_name, log):
                                 rollout_filepath = rollouts[idx][rollout_num]
                                 metrics[f'rollouts/skill_{idx}_num_{rollout_num}'] = wandb.Video(rollout_filepath, fps=8, format="mp4")
 
-                    entire_rb = buffer.sample_all()
-                    all_skills, all_next_obs, all_next_obs_embeddings = entire_rb['skill'], entire_rb['next_obs'], entire_rb['next_obs_embedding']
-                    all_features = crafter_utils.obs_to_features(all_next_obs)
-                    metrics['feature_divergences'] = crafter_vis.feature_divergences(all_features, all_skills)
+                    # entire_rb = buffer.sample_all()
+                    # all_skills, all_next_obs, all_next_obs_embeddings = entire_rb['skill'], entire_rb['next_obs'], entire_rb['next_obs_embedding']
+                    # all_features = crafter_utils.obs_to_features(all_next_obs)
+                    # metrics['feature_divergences'] = crafter_vis.feature_divergences(all_features, all_skills)
 
                     # tsne_features = crafter_utils.tsne_embeddings(all_next_obs_embeddings)
                     # metrics['embeddings/by_skill'] = crafter_vis.plot_embeddings_by_skill(tsne_features, all_skills, config.skill_size)
@@ -379,30 +351,28 @@ def train(key, config, run_name, log):
                     action_skill_mtx = onp.zeros_like(action_skill_mtx)
 
         if log:
-            wandb.log(metrics, step=t_step)
+            wandb.log(metrics, step=t_step*config.num_workers)
+            metrics.clear()
         
-        if log and t_step % config.save_freq == 0 or t_step == config.steps - 1:
-            checkpoints.save_checkpoint(ckpt_dir=os.path.join(os.getcwd(), 'data', run_name),
-                step=t_step, overwrite=True, keep=10, target={
-                'qlocal_params': qlocal_params,
-                'qtarget_params': qtarget_params,
-                'discrim_params': discrim_params
-            })
+        if log and config.save_checkpoints and (t_step % config.save_freq == 0 or t_step == config.steps - 1):
+            jnp.savez(os.path.join(os.getcwd(), 'data', run_name),
+                t_step=t_step,
+                qlocal_params=qlocal_params,
+                qtarget_params=qtarget_params,
+                discrim_params=discrim_params)
 
         obs, state = next_obs, next_state
         if t_step > config.warmup_steps:
-            eps = max(eps * config.eps_decay, config.eps_end)
-        if done or steps_per_ep >= config.max_steps_per_ep:
-            key, skill_update_key, env_reset_key = random.split(key, num=3)
-            skill_idx = random.randint(skill_update_key, minval=0, maxval=config.skill_size, shape=(1,)).item()
-            skill = jax.nn.one_hot(skill_idx, config.skill_size)
-            score_gt = 0.0
-            score_pr = 0.0
-            steps_per_ep = 0
-            if config.gym_np:
-                obs = jnp.array(env.reset())
-            else:
-                obs, state = env.reset(env_reset_key, env_params)
+            eps = max(eps * (config.eps_decay ** config.num_workers), config.eps_end)
+        score_gt = score_gt.at[done_idx].set(0.0)
+        score_pr = score_pr.at[done_idx].set(0.0)
+        steps_per_ep = steps_per_ep.at[done_idx].set(0)
+        key, skill_update_key = random.split(key)
+        skill_idx = jnp.where(
+            done,
+            random.randint(skill_update_key, minval=0, maxval=config.skill_size, shape=(config.num_workers,)),
+            skill_idx
+        )
 
 
 if __name__ == '__main__':
@@ -433,7 +403,9 @@ if __name__ == '__main__':
     else:
         run_name = None
 
-    print('Devices visible through JAX:', jax.devices())
+    devices = jax.devices()
+    print(f'{len(devices)} devices visible through JAX: {devices}')
+    config.num_workers = len(devices)
 
     key = random.PRNGKey(config.seed)
     train(key, config, run_name, log=not args.nolog)

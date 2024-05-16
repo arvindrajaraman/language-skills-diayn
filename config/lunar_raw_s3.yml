@@ -1,6 +1,6 @@
 action_size: 4
 batch_size: 1024
-buffer_size: 10000
+buffer_size: 10080
 discrim_lr: 0.0001
 env_name: LunarLander-v2
 
@@ -20,8 +20,7 @@ policy_lr: 0.001
 skill_size: 3
 state_size: 8
 tau: 0.001
-discrim_update_freq: 4
-q_update_freq: 4
+model_update_freq: 4
 exp_type: mlp
 discrim_units: 512
 policy_units: 512

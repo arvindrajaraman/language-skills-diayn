@@ -8,7 +8,67 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-# from model_utils import ResidualLayer
+class ActorCriticClassicCraftax(nn.Module):
+    action_size: int
+    hidden1_size: int
+    hidden2_size: int
+    skill_size: int
+
+    @nn.compact
+    def __call__(self, state):
+        maps, metadata = jnp.split(state, [7 * 9 * 21], axis=-1)
+        maps = maps.reshape((-1, 7, 9, 21))
+        maps = nn.Conv(features=32, kernel_size=(3, 3), padding='SAME')(maps)
+        maps = nn.relu(maps)
+        maps = nn.Conv(features=64, kernel_size=(3, 3), padding='SAME')(maps)
+        maps = nn.relu(maps)
+        maps = maps.reshape((maps.shape[0], -1))
+        y = jnp.concatenate((maps, metadata), axis=-1)
+
+        # Actor layers
+        a = nn.Dense(self.hidden1_size)(y)
+        a = nn.relu(a)
+        a = nn.Dense(self.hidden2_size)(a)
+        a = nn.relu(a)
+        a = nn.Dense(self.action_size)(a)
+
+        # Critic layers
+        c = nn.Dense(self.hidden1_size)(y)
+        c = nn.relu(c)
+        c = nn.Dense(self.hidden2_size)(c)
+        c = nn.relu(c)
+        c = nn.Dense(1)(c)
+
+        return a, c
+
+class ActorCriticClassic(nn.Module):
+    action_size: int
+    hidden1_size: int
+    hidden2_size: int
+    skill_size: int
+
+    @nn.compact
+    def __call__(self, state):
+        y = nn.Dense(features=self.hidden1_size)(state)
+        y = nn.relu(y)
+        y = nn.Dense(features=self.hidden2_size)(y)
+        y = nn.relu(y)
+
+        # Actor layers
+        a = nn.Dense(self.hidden1_size)(y)
+        a = nn.relu(a)
+        a = nn.Dense(self.hidden2_size)(a)
+        a = nn.relu(a)
+        a = nn.Dense(self.action_size)(a)
+
+        # Critic layers
+        c = nn.Dense(self.hidden1_size)(y)
+        c = nn.relu(c)
+        c = nn.Dense(self.hidden2_size)(c)
+        c = nn.relu(c)
+        c = nn.Dense(1)(c)
+
+        return a, c
 
 class QNetClassic(nn.Module):
     action_size: int
@@ -112,7 +172,7 @@ class QNetCraftax(nn.Module):
         y = nn.Dense(self.hidden2_size)(y)
         y = nn.relu(y)
         y = nn.Dense(self.action_size)(y)
-        return y
+        return y    
 
 class Discriminator(nn.Module):
     skill_size: int

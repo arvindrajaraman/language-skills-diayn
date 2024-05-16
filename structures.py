@@ -103,3 +103,11 @@ class ReplayBuffer(Dataset):
         tree_util.tree_map(set_idx, self._dict, transition)
         self.pointer = (self.pointer + 1) % self.max_size
         self.size = max(self.pointer, self.size)
+
+    def add_transition_batch(self, transition, batch_size):
+        def set_idx(buffer, new_element):
+            buffer[self.pointer:self.pointer + batch_size] = new_element
+
+        tree_util.tree_map(set_idx, self._dict, transition)
+        self.pointer = (self.pointer + batch_size) % self.max_size
+        self.size = max(self.pointer, self.size)

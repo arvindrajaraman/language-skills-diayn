@@ -28,7 +28,7 @@ from tqdm import tqdm
 import wandb
 
 # files
-from models import QNetClassic, QNetClassicCraftax
+from models import ActorCriticClassicCraftax, ActorCriticClassic
 from structures import ReplayBuffer
 from utils import grad_norm
 import lunar_vis
@@ -38,33 +38,27 @@ import crafter_vis
 
 def train(key, config, run_name, log):
     # region 1. Initialize training state
-    key, qlocal_key, qtarget_key, env_key = jax.random.split(key, num=4)
+    key, actor_key, qtarget_key, env_key = jax.random.split(key, num=4)
 
-    QNetModel = QNetClassicCraftax if config.env_name == 'Craftax-Classic-Symbolic-v1' else QNetClassic
+    Model = ActorCriticClassicCraftax if config.env_name == 'Craftax-Classic-Symbolic-v1' else ActorCriticClassic
     dummy_state = jnp.zeros((1, config.state_size))
 
-    qlocal = QNetModel(
+    model = ActorModel(
         action_size=config.action_size,
         hidden1_size=config.policy_units,
         hidden2_size=config.policy_units
     )
-    qlocal_params = qlocal.init(qlocal_key, dummy_state)
-    qlocal_opt = optax.adam(learning_rate=config.policy_lr)
-    qlocal_opt_state = qlocal_opt.init(qlocal_params)
-
-    qtarget = QNetModel(
-        action_size=config.action_size,
-        hidden1_size=config.policy_units,
-        hidden2_size=config.policy_units
-    )
-    qtarget_params = qtarget.init(qtarget_key, dummy_state)
+    model_params = model.init(model_key, dummy_state)
+    model_opt = optax.adam(learning_rate=config.policy_lr)
+    model_opt_state = model_opt.init(model_params)
 
     buffer = ReplayBuffer.create({
         'obs': jnp.zeros((config.state_size,)),
         'action': jnp.array(0, dtype=jnp.int32),
         'reward': jnp.array(0.0),
-        'next_obs': jnp.zeros((config.state_size,)),
         'done': jnp.array(False, dtype=jnp.bool_),
+        'log_pi_old': jnp.array(0.0),
+        'value_old': jnp.array(0.0)
     }, size=config.buffer_size)
 
     if config.env_name == 'LunarLander-v2':
@@ -82,48 +76,54 @@ def train(key, config, run_name, log):
 
     # 2. Define model usage/update functions
     @jit
-    def act(key, qlocal_params, obs, eps=0.0):
+    def act(key, model_params, obs, eps=0.0):
         key, explore_key, action_key = random.split(key, num=3)
         action = jnp.where(
             random.uniform(explore_key, shape=(config.num_workers,)) > eps,
-            jnp.argmax(qlocal.apply(qlocal_params, obs), axis=1),
+            jnp.argmax(model.apply(model_params, obs)[0], axis=1),
             random.choice(action_key, jnp.arange(config.action_size), shape=(config.num_workers,))
         )
         return key, action
 
     @jit
-    def update_q(qlocal_params, qlocal_opt_state, qtarget_params, batch):
-        def loss_fn(qlocal_params, batch):
-            obs, actions, rewards, next_obs, dones = batch['obs'], batch['action'], batch['reward'], batch['next_obs'], batch['done']
+    def update_model(model_params, model_opt_state, batch):
+        def loss_fn(actor_params, critic_params, batch):
+            obs, action, reward, next_obs, done, log_pi_old, value_old = batch['obs'], batch['action'], batch['reward'], batch['next_obs'], batch['done'], batch['log_pi_old'], batch['value_old']
+            
+            value_pred, pi = model.apply(model_params, obs)
+            value_pred = value_pred[:, 0]
 
-            Q_targets_next = qtarget.apply(qtarget_params, next_obs).max(axis=1)
-            Q_targets = rewards + (config.gamma * Q_targets_next * ~dones)
-            Q_expected = qlocal.apply(qlocal_params, obs)[jnp.arange(config.batch_size), actions]
+            log_prob = pi - pi.logsumexp(axis=-1, keepdims=True)
+            value_pred_clipped = value_old + (value_pred - value_old).clip(-config.clip_eps, config.clip_eps)
+            value_losses = jnp.square(value_pred - target)
+            value_losses_clipped = jnp.square(value_pred_clipped - target)
+            value_loss = 0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
 
-            loss = optax.squared_error(Q_targets, Q_expected).mean()
+            ratio = jnp.exp(log_prob - log_pi_old)
+            gae = (gae - gae.mean()) / (gae.std() + 1e-8)
+            loss_actor1 = ratio * gae
+            loss_actor2 = jnp.clip(ratio, 1.0 - config.clip_eps,
+                                1.0 + config.clip_eps) * gae
+            loss_actor = -jnp.minimum(loss_actor1, loss_actor2)
+            loss_actor = loss_actor.mean()
 
-            q_value_mean = Q_expected.mean()
-            target_value_mean = Q_targets.mean()
-            reward_mean = rewards.mean()
-            return loss, (q_value_mean, target_value_mean, reward_mean)
+            entropy = jax.scipy.special.entr(pi).mean()
+            total_loss = loss_actor + config.critic_coeff * value_loss - config.entropy_coeff * entropy
 
-        (loss, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qlocal_params, batch)
-        updates, qlocal_opt_state = qlocal_opt.update(grads, qlocal_opt_state)
-        qlocal_params = optax.apply_updates(qlocal_params, updates)
+            return total_loss, {
+                'value_loss': value_loss,
+                'actor_loss': loss_actor,
+                'entropy': entropy,
+                'value_pred': value_pred.mean(),
+                'target': target.mean(),
+                'gae': gae.mean()
+            }
 
-        q_value_mean, target_value_mean, reward_mean = aux_metrics
-        qlocal_metrics = {
-            'critic_loss': loss,
-            'q_values': q_value_mean,
-            'target_values': target_value_mean,
-            'qlocal_grad_norm': grad_norm(grads),
-            'reward': reward_mean
-        }
+        (loss, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(model_params, critic_params, batch)
+        updates, model_opt_state = model_opt.update(grads, model_opt_state)
+        model_params = optax.apply_updates(model_params, updates)
 
-        # Update target network
-        qtarget_params = optax.incremental_update(qlocal_params, qtarget_params, config.tau)
-
-        return qlocal_params, qlocal_opt_state, qtarget_params, qlocal_metrics
+        return model_params, model_opt_state, aux_metrics
 
     # 2. Run training
     if config.gym_np:
@@ -154,7 +154,7 @@ def train(key, config, run_name, log):
     episodes = 0
     metrics = dict()
     for t_step in tqdm(range(config.steps), unit_scale=config.num_workers):
-        key, action = act(key, qlocal_params, obs, eps)
+        key, action = act(key, actor_params, obs, eps)
         if config.gym_np:
             action = onp.asarray(action)
             next_obs, reward_gt, done, _ = env_step(action)
@@ -190,41 +190,41 @@ def train(key, config, run_name, log):
         if t_step > config.warmup_steps:
             batch = buffer.sample(config.batch_size)
             if t_step % config.model_update_freq == 0:
-                qlocal_params, qlocal_opt_state, qtarget_params, qlocal_metrics = update_q(qlocal_params, qlocal_opt_state, qtarget_params, batch)
-                metrics.update(qlocal_metrics)
+                model_params, model_opt_state, aux_metrics = update_model(model_params, model_opt_state, batch)
+                metrics.update(aux_metrics)
 
-            if config.env_name == 'LunarLander-v2':
-                x_index = ((obs[:, 0] - min_x) / bin_size_x).astype(int)
-                x_index = onp.minimum(onp.maximum(x_index, 0), num_bins_x - 1)
-                y_index = ((obs[:, 1] - min_y) / bin_size_y).astype(int)
-                y_index = onp.minimum(onp.maximum(y_index, 0), num_bins_y - 1)
+            # if config.env_name == 'LunarLander-v2':
+            #     x_index = ((obs[:, 0] - min_x) / bin_size_x).astype(int)
+            #     x_index = onp.minimum(onp.maximum(x_index, 0), num_bins_x - 1)
+            #     y_index = ((obs[:, 1] - min_y) / bin_size_y).astype(int)
+            #     y_index = onp.minimum(onp.maximum(y_index, 0), num_bins_y - 1)
 
-                visits[y_index, x_index] += 1
+            #     visits[y_index, x_index] += 1
 
-                if t_step % config.vis_freq == 0:
-                    metrics["log_visits_all"] = lunar_vis.plot_visits(visits, min_x, max_x, min_y, max_y, log=True)
-                    visits = onp.zeros_like(visits)
+            #     if t_step % config.vis_freq == 0:
+            #         metrics["log_visits_all"] = lunar_vis.plot_visits(visits, min_x, max_x, min_y, max_y, log=True)
+            #         visits = onp.zeros_like(visits)
 
-                if (t_step % config.vis_freq == 0 or t_step == config.steps - 1) and config.save_rollouts:
-                    rollouts = lunar_vis.gather_rollouts(qlocal, qlocal_params, config.rollouts_per_skill, config.max_steps_per_ep)
-                    for rollout_num in range(config.rollouts_per_skill):
-                        rollout_filepath = rollouts[rollout_num]
-                        metrics[f'rollouts/num_{rollout_num}'] = wandb.Video(rollout_filepath, fps=16, format="mp4")
-            elif config.env_name == 'Craftax-Classic-Symbolic-v1':
-                # Achievement counts
-                for idx in done_idx:
-                    achievement_counts_total += state.achievements[idx]
+            #     if (t_step % config.vis_freq == 0 or t_step == config.steps - 1) and config.save_rollouts:
+            #         rollouts = lunar_vis.gather_rollouts(actor, actor_params, config.rollouts_per_skill, config.max_steps_per_ep)
+            #         for rollout_num in range(config.rollouts_per_skill):
+            #             rollout_filepath = rollouts[rollout_num]
+            #             metrics[f'rollouts/num_{rollout_num}'] = wandb.Video(rollout_filepath, fps=16, format="mp4")
+            # elif config.env_name == 'Craftax-Classic-Symbolic-v1':
+            #     # Achievement counts
+            #     for idx in done_idx:
+            #         achievement_counts_total += state.achievements[idx]
 
-                if t_step % config.log_freq == 0:
-                    for idx, label in enumerate(crafter_constants.achievement_labels):
-                        metrics[f'achievements/{label}'] = achievement_counts_total[idx] / episodes
-                    metrics['score/crafter'] = crafter_utils.crafter_score(achievement_counts_total, episodes)
+            #     if t_step % config.log_freq == 0:
+            #         for idx, label in enumerate(crafter_constants.achievement_labels):
+            #             metrics[f'achievements/{label}'] = achievement_counts_total[idx] / episodes
+            #         metrics['score/crafter'] = crafter_utils.crafter_score(achievement_counts_total, episodes)
 
-                if (t_step % config.vis_freq == 0 or t_step == config.steps - 1) and config.save_rollouts:
-                    rollouts = crafter_vis.gather_rollouts(key, qlocal, qlocal_params, config.rollouts_per_skill, config.max_steps_per_ep)
-                    for rollout_num in range(config.rollouts_per_skill):
-                        rollout_filepath = rollouts[rollout_num]
-                        metrics[f'rollouts/num_{rollout_num}'] = wandb.Video(rollout_filepath, fps=8, format="mp4")
+            #     if (t_step % config.vis_freq == 0 or t_step == config.steps - 1) and config.save_rollouts:
+            #         rollouts = crafter_vis.gather_rollouts(key, actor, actor_params, config.rollouts_per_skill, config.max_steps_per_ep)
+            #         for rollout_num in range(config.rollouts_per_skill):
+            #             rollout_filepath = rollouts[rollout_num]
+            #             metrics[f'rollouts/num_{rollout_num}'] = wandb.Video(rollout_filepath, fps=8, format="mp4")
         
         if log:
             wandb.log(metrics, step=t_step*config.num_workers)
@@ -233,8 +233,7 @@ def train(key, config, run_name, log):
         if log and config.save_checkpoints and (t_step % config.save_freq == 0 or t_step == config.steps - 1):
             jnp.savez(os.path.join(os.getcwd(), 'data', run_name),
                 t_step=t_step,
-                qlocal_params=qlocal_params,
-                qtarget_params=qtarget_params)
+                model_params=model_params)
 
         obs, state = next_obs, next_state
         if t_step > config.warmup_steps:
