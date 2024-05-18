@@ -10,8 +10,7 @@ import optax
 
 class ActorCriticClassicCraftax(nn.Module):
     action_size: int
-    hidden1_size: int
-    hidden2_size: int
+    hidden_size: int
     skill_size: int
 
     @nn.compact
@@ -26,16 +25,16 @@ class ActorCriticClassicCraftax(nn.Module):
         y = jnp.concatenate((maps, metadata), axis=-1)
 
         # Actor layers
-        a = nn.Dense(self.hidden1_size)(y)
+        a = nn.Dense(self.hidden_size)(y)
         a = nn.relu(a)
-        a = nn.Dense(self.hidden2_size)(a)
+        a = nn.Dense(self.hidden_size)(a)
         a = nn.relu(a)
         a = nn.Dense(self.action_size)(a)
 
         # Critic layers
-        c = nn.Dense(self.hidden1_size)(y)
+        c = nn.Dense(self.hidden_size)(y)
         c = nn.relu(c)
-        c = nn.Dense(self.hidden2_size)(c)
+        c = nn.Dense(self.hidden_size)(c)
         c = nn.relu(c)
         c = nn.Dense(1)(c)
 
@@ -43,28 +42,27 @@ class ActorCriticClassicCraftax(nn.Module):
 
 class ActorCriticClassic(nn.Module):
     action_size: int
-    hidden1_size: int
-    hidden2_size: int
+    hidden_size: int
     skill_size: int
 
     @nn.compact
     def __call__(self, state):
-        y = nn.Dense(features=self.hidden1_size)(state)
+        y = nn.Dense(features=self.hidden_size)(state)
         y = nn.relu(y)
-        y = nn.Dense(features=self.hidden2_size)(y)
+        y = nn.Dense(features=self.hidden_size)(y)
         y = nn.relu(y)
 
         # Actor layers
-        a = nn.Dense(self.hidden1_size)(y)
+        a = nn.Dense(self.hidden_size)(y)
         a = nn.relu(a)
-        a = nn.Dense(self.hidden2_size)(a)
+        a = nn.Dense(self.hidden_size)(a)
         a = nn.relu(a)
         a = nn.Dense(self.action_size)(a)
 
         # Critic layers
-        c = nn.Dense(self.hidden1_size)(y)
+        c = nn.Dense(self.hidden_size)(y)
         c = nn.relu(c)
-        c = nn.Dense(self.hidden2_size)(c)
+        c = nn.Dense(self.hidden_size)(c)
         c = nn.relu(c)
         c = nn.Dense(1)(c)
 
@@ -72,22 +70,20 @@ class ActorCriticClassic(nn.Module):
 
 class QNetClassic(nn.Module):
     action_size: int
-    hidden1_size: int
-    hidden2_size: int
+    hidden_size: int
 
     @nn.compact
     def __call__(self, x):
-        x = nn.Dense(features=self.hidden1_size)(x)
+        x = nn.Dense(features=self.hidden_size)(x)
         x = nn.relu(x)
-        x = nn.Dense(features=self.hidden2_size)(x)
+        x = nn.Dense(features=self.hidden_size)(x)
         x = nn.relu(x)
         x = nn.Dense(features=self.action_size)(x)
         return x
 
 class QNetClassicCraftax(nn.Module):
     action_size: int
-    hidden1_size: int
-    hidden2_size: int
+    hidden_size: int
 
     @nn.compact
     def __call__(self, state):
@@ -101,47 +97,45 @@ class QNetClassicCraftax(nn.Module):
         maps = maps.reshape((maps.shape[0], -1))
 
         y = jnp.concatenate((maps, metadata), axis=-1)
-        y = nn.Dense(self.hidden1_size)(y)
+        y = nn.Dense(self.hidden_size)(y)
         y = nn.relu(y)
-        y = nn.Dense(self.hidden2_size)(y)
+        y = nn.Dense(self.hidden_size)(y)
         y = nn.relu(y)
         y = nn.Dense(self.action_size)(y)
         return y
 
 class QNet(nn.Module):
     action_size: int
-    hidden1_size: int
-    hidden2_size: int
+    hidden_size: int
 
     @nn.compact
     def __call__(self, state, skill):
         x = jnp.concatenate((state, skill), axis=-1)
-        x = nn.Dense(features=self.hidden1_size)(x)
+        x = nn.Dense(features=self.hidden_size)(x)
         x = nn.relu(x)
-        x = nn.Dense(features=self.hidden2_size)(x)
+        x = nn.Dense(features=self.hidden_size)(x)
         x = nn.relu(x)
         x = nn.Dense(features=self.action_size)(x)
         return x
 
 class QNetBootstrapped(nn.Module):
     action_size: int
-    hidden1_size: int
-    hidden2_size: int
+    hidden_size: int
     num_heads: int
 
     @nn.compact
     def __call__(self, state, skill):
         x = jnp.concatenate((state, skill), axis=-1)
-        x = nn.Dense(features=self.hidden1_size)(x)
+        x = nn.Dense(features=self.hidden_size)(x)
         x = nn.relu(x)
-        x = nn.Dense(features=self.hidden2_size)(x)
+        x = nn.Dense(features=self.hidden_size)(x)
         x = nn.relu(x)
 
         head_outputs = []
         for head_idx in range(self.num_heads):
-            h = nn.Dense(features=self.hidden1_size)(x)
+            h = nn.Dense(features=self.hidden_size)(x)
             h = nn.relu(h)
-            h = nn.Dense(features=self.hidden2_size)(h)
+            h = nn.Dense(features=self.hidden_size)(h)
             h = nn.relu(h)
             h = nn.Dense(features=self.action_size)(h)
             head_outputs.append(h)
@@ -152,8 +146,7 @@ class QNetBootstrapped(nn.Module):
 
 class QNetCraftax(nn.Module):
     action_size: int
-    hidden1_size: int
-    hidden2_size: int
+    hidden_size: int
 
     @nn.compact
     def __call__(self, state, skill):
@@ -167,31 +160,29 @@ class QNetCraftax(nn.Module):
         maps = maps.reshape((maps.shape[0], -1))
 
         y = jnp.concatenate((maps, metadata, skill), axis=-1)
-        y = nn.Dense(self.hidden1_size)(y)
+        y = nn.Dense(self.hidden_size)(y)
         y = nn.relu(y)
-        y = nn.Dense(self.hidden2_size)(y)
+        y = nn.Dense(self.hidden_size)(y)
         y = nn.relu(y)
         y = nn.Dense(self.action_size)(y)
         return y    
 
 class Discriminator(nn.Module):
     skill_size: int
-    hidden1_size: int
-    hidden2_size: int
+    hidden_size: int
 
     @nn.compact
     def __call__(self, state):
-        x = nn.Dense(features=self.hidden1_size)(state)
+        x = nn.Dense(features=self.hidden_size)(state)
         x = nn.relu(x)
-        x = nn.Dense(features=self.hidden2_size)(x)
+        x = nn.Dense(features=self.hidden_size)(x)
         x = nn.relu(x)
         x = nn.Dense(features=self.skill_size)(x)
         return x
 
 class DiscriminatorCraftax(nn.Module):
     skill_size: int
-    hidden1_size: int
-    hidden2_size: int
+    hidden_size: int
 
     @nn.compact
     def __call__(self, state):
@@ -207,9 +198,9 @@ class DiscriminatorCraftax(nn.Module):
         maps = maps.reshape((maps.shape[0], -1))
         
         x = jnp.concatenate((maps, metadata), axis=-1)
-        x = nn.Dense(features=self.hidden1_size)(x)
+        x = nn.Dense(features=self.hidden_size)(x)
         x = nn.relu(x)
-        x = nn.Dense(features=self.hidden2_size)(x)
+        x = nn.Dense(features=self.hidden_size)(x)
         x = nn.relu(x)
         x = nn.Dense(features=self.skill_size)(x)
         return x
