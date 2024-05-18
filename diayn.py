@@ -387,7 +387,10 @@ if __name__ == '__main__':
     config = ConfigDict(config)
 
     if not args.nolog:
-        run_name = '{}_{}_{}_{}_{}'.format(config.env_name, config.exp_type, config.skill_size, config.embedding_type, int(datetime.now().timestamp()))
+        if 'name' not in config:
+            run_name = '{}_{}_{}_{}_{}'.format(config.env_name, config.exp_type, config.skill_size, config.embedding_type, int(datetime.now().timestamp()))
+        else:
+            run_name = '{}_{}'.format(config.name, int(datetime.now().timestamp()))
         os.makedirs(f'./data/{run_name}')
 
         load_dotenv()

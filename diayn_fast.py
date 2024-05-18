@@ -113,7 +113,6 @@ def train(key, config, run_name, log):
     env_params = env.default_params
     env_reset = jit(vmap(env.reset, in_axes=(0, None)))
     env_step = jit(vmap(env.step, in_axes=(0, 0, 0, None)))
-    buffer_add = jit(buffer.add)
     obs, state = env_reset(random.split(env_key, config.vectorization), env_params)
 
     steps_per_ep = jnp.zeros((config.vectorization,), dtype=jnp.int32)
@@ -134,12 +133,13 @@ def train(key, config, run_name, log):
 
         steps_per_ep += 1
         episodes += done_idx.sum()
-        metrics['steps_per_ep'] = steps_per_ep[done_idx].mean().item()
+        if done_idx.shape[0] > 0:
+            metrics['steps_per_ep'] = steps_per_ep[done_idx].mean().item()
         metrics['steps'] = t_step * config.vectorization
         metrics['eps'] = eps
         metrics['episodes'] = episodes
 
-        # buffer_state = buffer_add(buffer_state, {
+        # buffer_state = buffer.add(buffer_state, {
         #     'obs': obs,
         #     'action': action,
         #     'skill': skill,
@@ -163,7 +163,7 @@ def train(key, config, run_name, log):
                 batch = buffer.sample(config.batch_size)
                 # key, buffer_key = random.split(key)
                 # batch = buffer.sample(buffer_state, buffer_key).experience
-                policy_params, policy_opt_state, discrim_params, discrim_opt_state, model_metrics = diayn_utils.dqn_update_model(policy, policy_params, policy_opt, policy_opt_state, discrim, discrim_params, discrim_opt, discrim_opt_state, config.batch_size, config.skill_size, config.gamma, config.tau, config.reward_pr_coeff, config.reward_gt_coeff, batch)
+                policy_params, policy_opt_state, discrim_params, discrim_opt_state, model_metrics = diayn_utils.dqn_update_model(policy, policy_params, policy_opt, policy_opt_state, discrim, discrim_params, discrim_opt, discrim_opt_state, config.batch_size, config.skill_size, config.gamma, config.tau, config.reward_gt_coeff, batch)
             metrics.update(model_metrics)
 
             action_skill_mtx[skill_idx, action] += 1
@@ -175,7 +175,9 @@ def train(key, config, run_name, log):
             for idx, label in enumerate(crafter_constants.achievement_labels):
                 metrics[f'achievements/{label}'] = achievement_counts_total[idx] / episodes
             metrics['score/crafter'] = crafter_utils.crafter_score(achievement_counts_total, episodes)
-            metrics[f'score/crafter_s{skill_idx}'] = crafter_utils.crafter_score(achievement_counts, episodes / config.skill_size)
+            
+            for idx in range(config.skill_size):
+                metrics[f'score/crafter_s{idx}'] = crafter_utils.crafter_score(achievement_counts[idx], episodes / config.skill_size)
             
             if (t_step % config.vis_freq == 10 or t_step == config.steps - 1):
                 metrics['achievement_counts'] = crafter_vis.achievement_counts_heatmap(achievement_counts, config.skill_size)

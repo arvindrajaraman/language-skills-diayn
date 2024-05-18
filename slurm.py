@@ -56,9 +56,9 @@ if __name__ == '__main__':
         f.write('echo "Allocating $FRACTION of GPU ($TARGET_MEMORY MiB out of $TOTAL_MEMORY MiB)"\n')
         f.write('export XLA_PYTHON_CLIENT_MEM_FRACTION=$FRACTION\n')
         f.write('\n')
-        f.write('srun ' + 'conda run --no-capture-output -n diayn ' + command + '\n')
+        f.write('srun ' + 'conda run --no-capture-output -n diayn4 ' + command + '\n')
 
-    print(f'Logging at: slurm_logs/{timestamp}-out.txt and slurm_logs/{timestamp}-err.txt')
+    print(f'Logging at: slurm/{timestamp}-out.txt and slurm/{timestamp}-err.txt')
     print('Running...')
 
     subprocess.run(f'chmod u+x slurm/command.sh'.split(' '))
