@@ -313,9 +313,12 @@ def train(key, config, run_name, log):
             for idx in done_idx:
                 achievement_counts[skill_idx] += state.achievements[idx].reshape(-1)
                 achievement_counts_total += state.achievements[idx].reshape(-1)
-                metrics['nuclear_norm'] = jnp.nan_to_num(
-                    jnp.linalg.norm(achievement_counts, ord='nuc'), nan=0.0, posinf=0.0, neginf=0.0
-                )
+                try:
+                    metrics['nuclear_norm'] = jnp.nan_to_num(
+                        jnp.linalg.norm(achievement_counts, ord='nuc'), nan=0.0, posinf=0.0, neginf=0.0
+                    )
+                except:
+                    print('Warning: nuclear norm failed.')
     
             for idx, label in enumerate(crafter_constants.achievement_labels):
                 metrics[f'achievements/{label}'] = achievement_counts_total[idx] / episodes
