@@ -97,6 +97,7 @@ def train(key, config, run_name, log):
         embedding_model = crafter_utils.new_embedding_model()
         def embedding_fn(next_obs):
             embedding = crafter_utils.embedding_crafter(embedding_model, next_obs)
+            ic(jnp.concatenate((embedding, next_obs), axis=-1).shape)
             return jnp.concatenate((embedding, next_obs), axis=-1), None
     else:
         raise ValueError(f"Invalid embedding type: {config['embedding_type']}")
