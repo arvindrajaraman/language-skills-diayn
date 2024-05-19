@@ -31,9 +31,9 @@ reward_pr_coeff: 1.0
 reward_gt_coeff: 100.0
 
 # Exploration
-eps_decay: 0.999997
 eps_start: 1.0
-eps_end: 0.01
+eps_end: 0.1
+eps_end_perc: 0.75
 
 # Embedding
 embedding_size: 768

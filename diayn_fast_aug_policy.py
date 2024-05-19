@@ -25,7 +25,7 @@ from tqdm import tqdm
 import wandb
 
 import diayn_utils
-from models import QNetCraftax, DiscriminatorCraftax, Discriminator
+from models import QNetCraftaxAugmented, DiscriminatorCraftax, Discriminator
 from structures import ReplayBuffer
 from utils import grad_norm
 import crafter_constants
@@ -47,19 +47,19 @@ def train(key, config, run_name, log):
     dummy_embedding = jnp.zeros((1, config.embedding_size))
     dummy_skill = jnp.zeros((1, config.skill_size))
 
-    qlocal = QNetCraftax(
+    qlocal = QNetCraftaxAugmented(
         action_size=config.action_size,
         hidden_size=config.policy_units
     )
-    qlocal_params = qlocal.init(qlocal_key, dummy_state, dummy_skill)
+    qlocal_params = qlocal.init(qlocal_key, dummy_state, dummy_embedding, dummy_skill)
     qlocal_opt = optax.adam(learning_rate=config.policy_lr)
     qlocal_opt_state = qlocal_opt.init(qlocal_params)
 
-    qtarget = QNetCraftax(
+    qtarget = QNetCraftaxAugmented(
         action_size=config.action_size,
         hidden_size=config.policy_units
     )
-    qtarget_params = qtarget.init(qtarget_key, dummy_state, dummy_skill)
+    qtarget_params = qtarget.init(qtarget_key, dummy_state, dummy_embedding, dummy_skill)
 
     DiscriminatorModel = DiscriminatorCraftax if config.embedding_type == 'identity' else Discriminator
     discrim = DiscriminatorModel(
@@ -93,11 +93,6 @@ def train(key, config, run_name, log):
     elif config.embedding_type == 'crafter':
         embedding_model = crafter_utils.new_embedding_model()
         embedding_fn = lambda next_obs: crafter_utils.embedding_crafter(embedding_model, next_obs)
-    elif config.embedding_type == 'crafter_and_identity':
-        embedding_model = crafter_utils.new_embedding_model()
-        def embedding_fn(next_obs):
-            embedding = crafter_utils.embedding_crafter(embedding_model, next_obs)
-            return jnp.concatenate((embedding, next_obs), axis=-1), None
     else:
         raise ValueError(f"Invalid embedding type: {config['embedding_type']}")
 
@@ -118,11 +113,11 @@ def train(key, config, run_name, log):
 
     #region Model usage functions
     @jit
-    def act(key, qlocal_params, obs, skill, eps=0.0):
+    def act(key, qlocal_params, obs, embedding, skill, eps=0.0):
         key, explore_key, action_key = random.split(key, num=3)
         action = jnp.where(
             random.uniform(explore_key, shape=(config.vectorization,)) > eps,
-            jnp.argmax(qlocal.apply(qlocal_params, obs, skill), axis=1),
+            jnp.argmax(qlocal.apply(qlocal_params, obs, embedding, skill), axis=1),
             random.choice(action_key, jnp.arange(config.action_size), shape=(config.vectorization,))
         )
         return key, action
@@ -147,14 +142,14 @@ def train(key, config, run_name, log):
 
     def update_policy(reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, batch):
         def loss_fn(qlocal_params, batch):
-            obs, actions, skills, reward_gts, next_obs, dones = batch['obs'], batch['action'], batch['skill'], batch['reward_gt'], batch['next_obs'], batch['done']
+            obs, obs_embeddings, actions, skills, reward_gts, next_obs, next_obs_embeddings, dones = batch['obs'], batch['obs_embedding'], batch['action'], batch['skill'], batch['reward_gt'], batch['next_obs'], batch['next_obs_embedding'], batch['done']
 
             reward_prs = reward_pr_function(discrim_params, batch)
             rewards = (config.reward_pr_coeff * reward_prs) + (config.reward_gt_coeff * reward_gts)
 
-            Q_targets_next = qtarget.apply(qtarget_params, next_obs, skills).max(axis=1)
+            Q_targets_next = qtarget.apply(qtarget_params, next_obs, next_obs_embeddings, skills).max(axis=1)
             Q_targets = rewards + (config.gamma * Q_targets_next * ~dones)
-            Q_expected = qlocal.apply(qlocal_params, obs, skills)[jnp.arange(config.batch_size), actions]
+            Q_expected = qlocal.apply(qlocal_params, obs, obs_embeddings, skills)[jnp.arange(config.batch_size), actions]
 
             loss = optax.squared_error(Q_targets, Q_expected).mean()
 
@@ -275,7 +270,7 @@ def train(key, config, run_name, log):
     metrics = dict()
     for t_step in tqdm(range(config.steps), unit_scale=config.vectorization):
         skill = jax.nn.one_hot(skill_idx, config.skill_size)
-        key, action = act(key, qlocal_params, obs, skill, eps)
+        key, action = act(key, qlocal_params, obs, obs_embedding, skill, eps)
         key, step_key = random.split(key)
         next_obs, next_state, reward_gt, done, _ = env_step(random.split(step_key, config.vectorization), state, action, env_params)
         next_obs_embedding, _ = embedding_fn(next_obs)

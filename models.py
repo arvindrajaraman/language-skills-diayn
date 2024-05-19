@@ -165,6 +165,29 @@ class QNetCraftax(nn.Module):
         y = nn.Dense(self.hidden_size)(y)
         y = nn.relu(y)
         y = nn.Dense(self.action_size)(y)
+        return y   
+    
+class QNetCraftaxAugmented(nn.Module):
+    action_size: int
+    hidden_size: int
+
+    @nn.compact
+    def __call__(self, state, embedding, skill):
+        maps, metadata = jnp.split(state, [7 * 9 * 21], axis=-1)
+        maps = maps.reshape((-1, 7, 9, 21))
+        
+        maps = nn.Conv(features=32, kernel_size=(3, 3), padding='SAME')(maps)
+        maps = nn.relu(maps)
+        maps = nn.Conv(features=64, kernel_size=(3, 3), padding='SAME')(maps)
+        maps = nn.relu(maps)
+        maps = maps.reshape((maps.shape[0], -1))
+
+        y = jnp.concatenate((maps, metadata, embedding, skill), axis=-1)
+        y = nn.Dense(self.hidden_size)(y)
+        y = nn.relu(y)
+        y = nn.Dense(self.hidden_size)(y)
+        y = nn.relu(y)
+        y = nn.Dense(self.action_size)(y)
         return y    
 
 class Discriminator(nn.Module):

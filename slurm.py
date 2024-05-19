@@ -23,7 +23,7 @@ if __name__ == '__main__':
     timestamp = int(datetime.now().timestamp())
 
     JOB_NAME = 'crafter_dqn'
-    TIME = '24:00:00'
+    TIME = '12:00:00'
     GPUS = 1
     GPU_SHARDS = 4
     CPUS_PER_TASK = 1
