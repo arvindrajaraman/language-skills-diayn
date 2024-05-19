@@ -1,4 +1,4 @@
-name: metra_lang
+name: metra_lang_hybrid
 skill_learning_method: metra
 exp_type: mlp
 
@@ -28,7 +28,7 @@ vectorization: 100
 
 # Reward shaping
 reward_pr_coeff: 1.0
-reward_gt_coeff: 0.0
+reward_gt_coeff: 100.0
 
 # Exploration
 eps_decay: 0.999997

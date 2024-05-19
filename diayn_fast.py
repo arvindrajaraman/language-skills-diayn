@@ -27,6 +27,7 @@ import wandb
 import diayn_utils
 from models import QNetCraftax, DiscriminatorCraftax, Discriminator
 from structures import ReplayBuffer
+from utils import grad_norm
 import crafter_constants
 import crafter_utils
 import crafter_vis
@@ -40,13 +41,12 @@ def train(key, config, run_name, log):
     assert config.env_name == 'Craftax-Classic-Symbolic-v1', "Cannot train using this file if the env is not Craftax"
 
     #region Initialize training state
-    key, policy_key, discrim_key, env_key, skill_init_key = jax.random.split(key, num=5)
+    key, qlocal_key, qtarget_key, discrim_key, env_key, skill_init_key = jax.random.split(key, num=6)
 
     dummy_state = jnp.zeros((1, config.state_size))
     dummy_embedding = jnp.zeros((1, config.embedding_size))
     dummy_skill = jnp.zeros((1, config.skill_size))
 
-    qlocal_key, qtarget_key = jax.random.split(policy_key)
     qlocal = QNetCraftax(
         action_size=config.action_size,
         hidden_size=config.policy_units
@@ -69,7 +69,7 @@ def train(key, config, run_name, log):
     discrim_params = discrim.init(discrim_key, dummy_embedding)
     discrim_opt = optax.adam(learning_rate=config.discrim_lr)
     discrim_opt_state = discrim_opt.init(discrim_params)
-
+        
     if config.skill_learning_method == 'metra':
         metra_lambda = jnp.array(config.metra_lambda_init)
         metra_lambda_opt = optax.adam(learning_rate=config.discrim_lr)
@@ -134,17 +134,17 @@ def train(key, config, run_name, log):
     def metra_reward_pr_function(discrim_params, batch):
         obs_embeddings, next_obs_embeddings, skills = batch['obs_embedding'], batch['next_obs_embedding'], batch['skill']
 
-        phi_obs = phi.apply(phi_params, obs_embeddings)
-        phi_next_obs = phi.apply(phi_params, next_obs_embeddings)
+        phi_obs = discrim.apply(discrim_params, obs_embeddings)
+        phi_next_obs = discrim.apply(discrim_params, next_obs_embeddings)
 
-        return jnp.dot((phi_next_obs - phi_obs).T, skills)
+        return jnp.sum((phi_next_obs - phi_obs) * skills, axis=1)
 
     def update_policy(reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, batch):
         def loss_fn(qlocal_params, batch):
             obs, actions, skills, reward_gts, next_obs, dones = batch['obs'], batch['action'], batch['skill'], batch['reward_gt'], batch['next_obs'], batch['done']
 
             reward_prs = reward_pr_function(discrim_params, batch)
-            rewards = reward_prs + (config.reward_gt_coeff * reward_gts)
+            rewards = (config.reward_pr_coeff * reward_prs) + (config.reward_gt_coeff * reward_gts)
 
             Q_targets_next = qtarget.apply(qtarget_params, next_obs, skills).max(axis=1)
             Q_targets = rewards + (config.gamma * Q_targets_next * ~dones)
@@ -162,7 +162,7 @@ def train(key, config, run_name, log):
         qlocal_params = optax.apply_updates(qlocal_params, qlocal_updates)
         qtarget_params = optax.incremental_update(qlocal_params, qtarget_params, config.tau)
 
-        model_metrics = {
+        policy_metrics = {
             'critic_loss': loss,
             'q_values': q_value_mean,
             'target_values': target_value_mean,
@@ -186,7 +186,7 @@ def train(key, config, run_name, log):
             return loss, (acc, pplx)
         
         (loss, (discrim_acc, discrim_pplx)), grads = jax.value_and_grad(loss_fn, has_aux=True)(discrim_params, batch)
-        discrim_updates, discrim_opt_state = discrim_opt.update(discrim_grads, discrim_opt_state)
+        discrim_updates, discrim_opt_state = discrim_opt.update(grads, discrim_opt_state)
         discrim_params = optax.apply_updates(discrim_params, discrim_updates)
 
         skill_learning_metrics = {
@@ -202,19 +202,20 @@ def train(key, config, run_name, log):
         def loss_fn(discrim_params, metra_lambda, batch):
             obs_embeddings, next_obs_embeddings, skills = batch['obs_embedding'], batch['next_obs_embedding'], batch['skill']
 
-            phi_obs = phi.apply(phi_params, obs_embeddings)
-            phi_next_obs = phi.apply(phi_params, next_obs_embeddings)
+            phi_obs = discrim.apply(discrim_params, obs_embeddings)
+            phi_next_obs = discrim.apply(discrim_params, next_obs_embeddings)
 
-            wdm_term = jnp.dot((phi_next_obs - phi_obs).T, skills)
+            wdm_term = jnp.sum((phi_next_obs - phi_obs) * skills, axis=1)
+            phi_diff_norm = jnp.square(phi_next_obs - phi_obs).sum(axis=1)
             temp_dist_term = jnp.minimum(
                 config.metra_eps,
-                1 - (jnp.linalg.norm(phi_next_obs - phi_obs, axis=1) ** 2)
+                1 - phi_diff_norm
             )
 
-            loss = (wdm_term + (metra_lambda * temp_dist_term)).mean()
+            loss = -(wdm_term + (metra_lambda * temp_dist_term)).mean()
             wdm_term_mean = wdm_term.mean()
             temp_dist_term_mean = temp_dist_term.mean()
-            temp_dist_mean = jnp.linalg.norm(phi_next_obs - phi_obs, axis=1).mean()
+            temp_dist_mean = phi_diff_norm.mean()
 
             return loss, (wdm_term_mean, temp_dist_term_mean, temp_dist_mean)
 
@@ -222,6 +223,7 @@ def train(key, config, run_name, log):
         discrim_updates, discrim_opt_state = discrim_opt.update(discrim_grads, discrim_opt_state)
         discrim_params = optax.apply_updates(discrim_params, discrim_updates)
         
+        metra_lambda_grads = -metra_lambda_grads
         metra_lambda_updates, metra_lambda_opt_state = metra_lambda_opt.update(metra_lambda_grads, metra_lambda_opt_state)
         metra_lambda = optax.apply_updates(metra_lambda, metra_lambda_updates)
 
@@ -232,7 +234,7 @@ def train(key, config, run_name, log):
             'metra_temp_dist_term_mean': temp_dist_term_mean,
             'metra_temp_dist_mean': temp_dist_mean,
             'metra_discrim_grad_norm': grad_norm(discrim_grads),
-            'metra_lambda_grad_norm': grad_norm(metra_lambda_grads),
+            'metra_lambda_grad_norm': metra_lambda_grads,
             'metra_lambda': metra_lambda
         }
 
@@ -245,7 +247,7 @@ def train(key, config, run_name, log):
         return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics
 
     @jit
-    def full_metra_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, lambda_, lambda_opt_state, batch):
+    def full_metra_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, batch):
         qlocal_params, qlocal_opt_state, qtarget_params, policy_metrics = update_policy(metra_reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, batch)
         discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, skill_learning_metrics = update_metra_repfn(discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, batch)
         return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, policy_metrics, skill_learning_metrics
@@ -267,7 +269,7 @@ def train(key, config, run_name, log):
     metrics = dict()
     for t_step in tqdm(range(config.steps), unit_scale=config.vectorization):
         skill = jax.nn.one_hot(skill_idx, config.skill_size)
-        key, action = act(key, qlocal_params, obs, skill, config.action_size, config.vectorization, eps)
+        key, action = act(key, qlocal_params, obs, skill, eps)
         key, step_key = random.split(key)
         next_obs, next_state, reward_gt, done, _ = env_step(random.split(step_key, config.vectorization), state, action, env_params)
         next_obs_embedding, _ = embedding_fn(next_obs)
@@ -294,13 +296,13 @@ def train(key, config, run_name, log):
             'done': done
         }, batch_size=config.vectorization)
 
-        if t_step > config.warmup_steps:
+        if t_step >= config.warmup_steps:
             for _ in range(model_updates_per_iter):
                 batch = buffer.sample(config.batch_size)
                 if config.skill_learning_method == 'diayn':
                     qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics = full_diayn_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, batch)
                 elif config.skill_learning_method == 'metra':
-                    qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, policy_metrics, skill_learning_metrics = full_metra_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, lambda_, lambda_opt_state, batch)
+                    qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, policy_metrics, skill_learning_metrics = full_metra_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, batch)
                 else:
                     raise NotImplementedError(f'Unknown skill learning method: {config.skill_learning_method}')
             metrics.update(policy_metrics)
@@ -309,8 +311,11 @@ def train(key, config, run_name, log):
             action_skill_mtx[skill_idx, action] += 1
             # Achievement counts
             for idx in done_idx:
-                achievement_counts[skill_idx] += state.achievements[idx]
-                achievement_counts_total += state.achievements[idx]
+                achievement_counts[skill_idx] += state.achievements[idx].reshape(-1)
+                achievement_counts_total += state.achievements[idx].reshape(-1)
+                metrics['nuclear_norm'] = jnp.nan_to_num(
+                    jnp.linalg.norm(achievement_counts, ord='nuc'), nan=0.0, posinf=0.0, neginf=0.0
+                )
     
             for idx, label in enumerate(crafter_constants.achievement_labels):
                 metrics[f'achievements/{label}'] = achievement_counts_total[idx] / episodes
@@ -319,18 +324,18 @@ def train(key, config, run_name, log):
             for idx in range(config.skill_size):
                 metrics[f'score/crafter_s{idx}'] = crafter_utils.crafter_score(achievement_counts[idx], episodes / config.skill_size)
             
-            if (t_step % config.vis_freq == 10 or t_step == config.steps - 1):
+            if (t_step % config.vis_freq == 0 or t_step == config.steps - 1):
                 metrics['achievement_counts'] = crafter_vis.achievement_counts_heatmap(achievement_counts, config.skill_size)
                 metrics['achievement_counts_log'] = crafter_vis.achievement_counts_heatmap(
                     jnp.where(achievement_counts > 0, jnp.log(achievement_counts), 0), config.skill_size)
                 
-                # if config.save_rollouts:
-                #     print('Saving rollouts...')
-                #     rollouts = crafter_vis.gather_rollouts_by_skill(key, qlocal, qlocal_params, discrim, discrim_params, embedding_fn, config.skill_size, config.rollouts_per_skill, config.max_steps_per_ep)
-                #     for idx in range(config.skill_size):
-                #         for rollout_num in range(config.rollouts_per_skill):
-                #             rollout_filepath = rollouts[idx][rollout_num]
-                #             metrics[f'rollouts/skill_{idx}_num_{rollout_num}'] = wandb.Video(rollout_filepath, fps=8, format="mp4")
+                if config.save_rollouts:
+                    print('Saving rollouts...')
+                    rollouts = crafter_vis.gather_rollouts_by_skill(key, qlocal, qlocal_params, discrim, discrim_params, embedding_fn, config.skill_size, config.rollouts_per_skill, config.max_steps_per_ep)
+                    for idx in range(config.skill_size):
+                        for rollout_num in range(config.rollouts_per_skill):
+                            rollout_filepath = rollouts[idx][rollout_num]
+                            metrics[f'rollouts/skill_{idx}_num_{rollout_num}'] = wandb.Video(rollout_filepath, fps=8, format="mp4")
 
                 # entire_rb = buffer.sample_all()
                 # all_skills, all_next_obs, all_next_obs_embeddings = entire_rb['skill'], entire_rb['next_obs'], entire_rb['next_obs_embedding']
@@ -341,7 +346,6 @@ def train(key, config, run_name, log):
                 # metrics['embeddings/by_skill'] = crafter_vis.plot_embeddings_by_skill(tsne_features, all_skills, config.skill_size)
                 # metrics['embeddings/by_timestep'] = crafter_vis.plot_embeddings_by_timestep(tsne_features, all_timesteps)
 
-                achievement_counts = onp.zeros_like(achievement_counts)
                 action_skill_mtx = onp.zeros_like(action_skill_mtx)
 
         if log:
@@ -349,11 +353,16 @@ def train(key, config, run_name, log):
             metrics.clear()
         
         if log and config.save_checkpoints and (t_step % config.save_freq == 0 or t_step == config.steps - 1):
-            jnp.savez(os.path.join(os.getcwd(), 'data', run_name),
-                t_step=t_step,
-                policy_params=policy_params,
-                discrim_params=discrim_params,
-                buffer_dict=buffer._dict)
+            to_save = {
+                't_step': t_step,
+                'qlocal_params': qlocal_params,
+                'qtarget_params': qtarget_params,
+                'discrim_params': discrim_params,
+                'buffer_dict': buffer._dict
+            }
+            if config.skill_learning_method == 'metra':
+                to_save['metra_lambda'] = metra_lambda
+            jnp.savez(os.path.join(os.getcwd(), 'data', run_name), **to_save)
 
         obs, obs_embedding, state = next_obs, next_obs_embedding, next_state
         if t_step > config.warmup_steps:
@@ -380,7 +389,10 @@ if __name__ == '__main__':
     config = ConfigDict(config)
 
     if not args.nolog:
-        run_name = '{}_{}_{}_{}_{}'.format(config.env_name, config.exp_type, config.skill_size, config.embedding_type, int(datetime.now().timestamp()))
+        if 'name' not in config:
+            run_name = '{}_{}_{}_{}_{}'.format(config.env_name, config.exp_type, config.skill_size, config.embedding_type, int(datetime.now().timestamp()))
+        else:
+            run_name = '{}_{}'.format(config.name, int(datetime.now().timestamp()))
         os.makedirs(f'./data/{run_name}')
 
         load_dotenv()

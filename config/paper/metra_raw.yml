@@ -1,4 +1,4 @@
-name: metra_lang
+name: metra_raw
 skill_learning_method: metra
 exp_type: mlp
 
@@ -36,8 +36,8 @@ eps_start: 1.0
 eps_end: 0.01
 
 # Embedding
-embedding_size: 768
-embedding_type: crafter
+embedding_size: 1345
+embedding_type: identity
 skill_size: 5
 
 # Other

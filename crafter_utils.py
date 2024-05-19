@@ -15,7 +15,12 @@ from crafter_constants import blocks_labels, mobs_labels, inventory_labels
 
 def crafter_score(achievement_counts, episodes):
     achievement_success_rates = ((achievement_counts / episodes) * 100.0)
-    return onp.exp(onp.log(achievement_success_rates + 1.0).mean()) - 1.0
+    return onp.nan_to_num(
+        onp.exp(onp.log(achievement_success_rates + 1.0).mean()) - 1.0,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0
+    )
 
 def separate_features(features, idxs):
     i = jnp.argsort(idxs)

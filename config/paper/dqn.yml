@@ -1,5 +1,5 @@
-name: metra_lang
-skill_learning_method: metra
+name: dqn
+skill_learning_method: diayn
 exp_type: mlp
 
 # Training regime
@@ -9,10 +9,6 @@ max_steps_per_ep: 1000
 model_update_freq: 4
 batch_size: 512
 buffer_size: 50400
-
-# METRA
-metra_eps: 0.001
-metra_lambda_init: 30.0
 
 # Learning rates
 discrim_lr: 0.0002
@@ -27,8 +23,8 @@ save_rollouts: true
 vectorization: 100
 
 # Reward shaping
-reward_pr_coeff: 1.0
-reward_gt_coeff: 0.0
+reward_pr_coeff: 0.0
+reward_gt_coeff: 1.0
 
 # Exploration
 eps_decay: 0.999997
@@ -36,9 +32,9 @@ eps_start: 1.0
 eps_end: 0.01
 
 # Embedding
-embedding_size: 768
-embedding_type: crafter
-skill_size: 5
+embedding_size: 1345
+embedding_type: identity
+skill_size: 1
 
 # Other
 discrim_units: 768

@@ -81,7 +81,6 @@ def gather_rollouts_by_skill(key, qlocal, qlocal_params, discrim, discrim_params
                 next_obs, next_state, reward_gt, done, info = test_env.step(env_step_key, state, action,
                                                                     env_params)
                 next_obs_embedding, next_obs_sentence = embedding_fn(next_obs.reshape(1, -1))
-                print('Sentence:', next_obs_sentence[0])
                 discrim_logits = discrim.apply(discrim_params, next_obs_embedding)
                 discrim_probs = jax.nn.softmax(discrim_logits)[0]
 
