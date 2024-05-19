@@ -24,7 +24,7 @@ vectorization: 100
 
 # Reward shaping
 reward_pr_coeff: 1.0
-reward_gt_coeff: 100.0
+reward_gt_coeff: 50.0
 
 # Exploration
 eps_start: 1.0
