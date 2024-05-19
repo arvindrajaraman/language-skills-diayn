@@ -318,7 +318,7 @@ def train(key, config, run_name, log):
                         jnp.linalg.norm(achievement_counts, ord='nuc'), nan=0.0, posinf=0.0, neginf=0.0
                     )
                 except:
-                    print('Warning: nuclear norm failed.')
+                    pass
     
             for idx, label in enumerate(crafter_constants.achievement_labels):
                 metrics[f'achievements/{label}'] = achievement_counts_total[idx] / episodes
