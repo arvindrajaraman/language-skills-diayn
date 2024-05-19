@@ -3,7 +3,7 @@ skill_learning_method: metra
 exp_type: mlp
 
 # Training regime
-steps: 2000000
+steps: 1000000
 warmup_steps: 10000
 max_steps_per_ep: 1000
 model_update_freq: 4
