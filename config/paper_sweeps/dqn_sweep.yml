@@ -61,6 +61,8 @@ parameters:
     value: 1
   skill_learning_method:
     value: diayn
+  reward_coeff_schedule:
+    value: constant
   
   policy_units:
     values: [768, 1024, 2048]

@@ -144,12 +144,12 @@ def train(key, config, run_name, log):
 
         return jnp.sum((phi_next_obs - phi_obs) * skills, axis=1)
 
-    def update_policy(reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, batch):
-        def loss_fn(qlocal_params, batch):
+    def update_policy(reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, reward_pr_coeff, reward_gt_coeff, batch):
+        def loss_fn(qlocal_params, reward_pr_coeff, reward_gt_coeff, batch):
             obs, actions, skills, reward_gts, next_obs, dones = batch['obs'], batch['action'], batch['skill'], batch['reward_gt'], batch['next_obs'], batch['done']
 
             reward_prs = reward_pr_function(discrim_params, batch)
-            rewards = (config.reward_pr_coeff * reward_prs) + (config.reward_gt_coeff * reward_gts)
+            rewards = (reward_pr_coeff * reward_prs) + (reward_gt_coeff * reward_gts)
 
             Q_targets_next = qtarget.apply(qtarget_params, next_obs, skills).max(axis=1)
             Q_targets = rewards + (config.gamma * Q_targets_next * ~dones)
@@ -162,7 +162,7 @@ def train(key, config, run_name, log):
             reward_mean = rewards.mean()
             return loss, (q_value_mean, target_value_mean, reward_mean)
 
-        (loss, (q_value_mean, target_value_mean, reward_mean)), grads = jax.value_and_grad(loss_fn, has_aux=True)(qlocal_params, batch)
+        (loss, (q_value_mean, target_value_mean, reward_mean)), grads = jax.value_and_grad(loss_fn, has_aux=True)(qlocal_params, reward_pr_coeff, reward_gt_coeff, batch)
         qlocal_updates, qlocal_opt_state = qlocal_opt.update(grads, qlocal_opt_state)
         qlocal_params = optax.apply_updates(qlocal_params, qlocal_updates)
         qtarget_params = optax.incremental_update(qlocal_params, qtarget_params, config.tau)
@@ -246,16 +246,43 @@ def train(key, config, run_name, log):
         return discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, skill_learning_metrics
 
     @jit
-    def full_diayn_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, batch):
-        qlocal_params, qlocal_opt_state, qtarget_params, policy_metrics = update_policy(diayn_reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, batch)
+    def full_diayn_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, reward_pr_coeff, reward_gt_coeff, batch):
+        qlocal_params, qlocal_opt_state, qtarget_params, policy_metrics = update_policy(diayn_reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, reward_pr_coeff, reward_gt_coeff, batch)
         discrim_params, discrim_opt_state, skill_learning_metrics = update_diayn_discrim(discrim_params, discrim_opt_state, batch)
         return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics
 
     @jit
-    def full_metra_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, batch):
-        qlocal_params, qlocal_opt_state, qtarget_params, policy_metrics = update_policy(metra_reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, batch)
+    def full_metra_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, reward_pr_coeff, reward_gt_coeff, batch):
+        qlocal_params, qlocal_opt_state, qtarget_params, policy_metrics = update_policy(metra_reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, reward_pr_coeff, reward_gt_coeff, batch)
         discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, skill_learning_metrics = update_metra_repfn(discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, batch)
         return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, policy_metrics, skill_learning_metrics
+    
+    @jit
+    def reward_coeff_schedule_discrete(t_step):
+        return jax.lax.cond(
+            (t_step - config.warmup_steps) < config.pretraining_steps,
+            lambda: (1.0, 0.0),
+            lambda: (0.0, 1.0)
+        )
+    
+    @jit
+    def reward_coeff_schedule_anneal(t_step):
+        reward_pr_coeff = 1.0 - ((t_step - config.warmup_steps) / (config.steps - config.warmup_steps))
+        reward_gt_coeff = 5.0 * ((t_step - config.warmup_steps) / (config.steps - config.warmup_steps))
+        return reward_pr_coeff, reward_gt_coeff
+    
+    @jit
+    def reward_coeff_schedule_constant(t_step):
+        return config.reward_pr_coeff, config.reward_gt_coeff
+    
+    if config.reward_coeff_schedule == 'discrete':
+        reward_coeff_schedule = reward_coeff_schedule_discrete
+    elif config.reward_coeff_schedule == 'anneal':
+        reward_coeff_schedule = reward_coeff_schedule_anneal
+    elif config.reward_coeff_schedule == 'constant':
+        reward_coeff_schedule = reward_coeff_schedule_constant
+    else:
+        raise NotImplementedError(f"Invalid reward_coeff_schedule: {config.reward_coeff_schedule}")
     #endregion
 
     #region Run training
@@ -302,12 +329,15 @@ def train(key, config, run_name, log):
         }, batch_size=config.vectorization)
 
         if t_step >= config.warmup_steps:
+            reward_pr_coeff, reward_gt_coeff = reward_coeff_schedule(t_step)
+            metrics['reward_pr_coeff'] = reward_pr_coeff
+            metrics['reward_gt_coeff'] = reward_gt_coeff
             for _ in range(model_updates_per_iter):
                 batch = buffer.sample(config.batch_size)
                 if config.skill_learning_method == 'diayn':
-                    qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics = full_diayn_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, batch)
+                    qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics = full_diayn_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, reward_pr_coeff, reward_gt_coeff, batch)
                 elif config.skill_learning_method == 'metra':
-                    qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, policy_metrics, skill_learning_metrics = full_metra_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, batch)
+                    qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, policy_metrics, skill_learning_metrics = full_metra_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, reward_pr_coeff, reward_gt_coeff, batch)
                 else:
                     raise NotImplementedError(f'Unknown skill learning method: {config.skill_learning_method}')
             metrics.update(policy_metrics)
