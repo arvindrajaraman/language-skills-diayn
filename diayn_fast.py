@@ -101,7 +101,6 @@ def train(key, config, run_name, log):
     else:
         raise ValueError(f"Invalid embedding type: {config['embedding_type']}")
 
-    action_skill_mtx = onp.zeros((config.skill_size, config.action_size))
     achievement_counts = onp.zeros((config.skill_size, 22), dtype=onp.int32)  # refreshes every config.vis_step steps
     achievement_counts_total = onp.zeros((22,), dtype=onp.int32)  # does not refresh
 
@@ -284,7 +283,7 @@ def train(key, config, run_name, log):
         )
 
         steps_per_ep += 1
-        episodes += done_idx.sum()
+        episodes += done_idx.shape[0]
         if done_idx.shape[0] > 0:
             metrics['steps_per_ep'] = steps_per_ep[done_idx].mean().item()
         metrics['steps'] = t_step * config.vectorization
@@ -314,18 +313,17 @@ def train(key, config, run_name, log):
             metrics.update(policy_metrics)
             metrics.update(skill_learning_metrics)
 
-            action_skill_mtx[skill_idx, action] += 1
             # Achievement counts
             for idx in done_idx:
-                achievement_counts[skill_idx] += state.achievements[idx].reshape(-1)
+                achievement_counts[skill_idx[idx]] += state.achievements[idx].reshape(-1)
                 achievement_counts_total += state.achievements[idx].reshape(-1)
                 try:
                     metrics['nuclear_norm'] = jnp.nan_to_num(
-                        jnp.linalg.norm(achievement_counts, ord='nuc'), nan=0.0, posinf=0.0, neginf=0.0
+                        jnp.linalg.norm(achievement_counts.T / episodes, ord='nuc'), nan=0.0, posinf=0.0, neginf=0.0
                     )
                 except:
-                    pass
-    
+                    metrics['nuclear_norm'] = 0.0
+            
             for idx, label in enumerate(crafter_constants.achievement_labels):
                 metrics[f'achievements/{label}'] = achievement_counts_total[idx] / episodes
             metrics['score/crafter'] = crafter_utils.crafter_score(achievement_counts_total, episodes)
@@ -337,25 +335,6 @@ def train(key, config, run_name, log):
                 metrics['achievement_counts'] = crafter_vis.achievement_counts_heatmap(achievement_counts, config.skill_size)
                 metrics['achievement_counts_log'] = crafter_vis.achievement_counts_heatmap(
                     jnp.where(achievement_counts > 0, jnp.log(achievement_counts), 0), config.skill_size)
-                
-                # if config.save_rollouts:
-                #     print('Saving rollouts...')
-                #     rollouts = crafter_vis.gather_rollouts_by_skill(key, qlocal, qlocal_params, discrim, discrim_params, embedding_fn, config.skill_size, config.rollouts_per_skill, config.max_steps_per_ep)
-                #     for idx in range(config.skill_size):
-                #         for rollout_num in range(config.rollouts_per_skill):
-                #             rollout_filepath = rollouts[idx][rollout_num]
-                #             metrics[f'rollouts/skill_{idx}_num_{rollout_num}'] = wandb.Video(rollout_filepath, fps=8, format="mp4")
-
-                # entire_rb = buffer.sample_all()
-                # all_skills, all_next_obs, all_next_obs_embeddings = entire_rb['skill'], entire_rb['next_obs'], entire_rb['next_obs_embedding']
-                # all_features = crafter_utils.obs_to_features(all_next_obs)
-                # metrics['feature_divergences'] = crafter_vis.feature_divergences(all_features, all_skills)
-
-                # tsne_features = crafter_utils.tsne_embeddings(all_next_obs_embeddings)
-                # metrics['embeddings/by_skill'] = crafter_vis.plot_embeddings_by_skill(tsne_features, all_skills, config.skill_size)
-                # metrics['embeddings/by_timestep'] = crafter_vis.plot_embeddings_by_timestep(tsne_features, all_timesteps)
-
-                action_skill_mtx = onp.zeros_like(action_skill_mtx)
 
         if log:
             wandb.log(metrics, step=t_step*config.vectorization)
@@ -402,7 +381,6 @@ if __name__ == '__main__':
             run_name = '{}_{}_{}_{}_{}'.format(config.env_name, config.exp_type, config.skill_size, config.embedding_type, int(datetime.now().timestamp()))
         else:
             run_name = '{}_{}'.format(config.name, int(datetime.now().timestamp()))
-        os.makedirs(f'./data/{run_name}')
 
         load_dotenv()
         wandb.login(key=os.getenv("WANDB_API_KEY"))
