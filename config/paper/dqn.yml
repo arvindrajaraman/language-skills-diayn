@@ -1,4 +1,4 @@
-name: dqn_fast_decay
+name: dqn
 skill_learning_method: diayn
 exp_type: mlp
 
