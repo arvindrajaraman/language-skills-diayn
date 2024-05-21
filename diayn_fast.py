@@ -74,6 +74,13 @@ def train(key, config, run_name, log):
         metra_lambda = jnp.array(config.metra_lambda_init)
         metra_lambda_opt = optax.adam(learning_rate=config.discrim_lr)
         metra_lambda_opt_state = metra_lambda_opt.init(metra_lambda)
+    elif config.skill_learning_method == 'rnd':
+        key, random_fn_key = jax.random.split(key)
+        random_fn = DiscriminatorModel(
+            skill_size=config.skill_size,
+            hidden_size=config.discrim_units
+        )
+        random_fn_params = random_fn.init(random_fn_key, dummy_embedding)
 
     buffer = ReplayBuffer.create({
         'obs': onp.zeros((config.state_size,)),
@@ -143,6 +150,29 @@ def train(key, config, run_name, log):
         phi_next_obs = discrim.apply(discrim_params, next_obs_embeddings)
 
         return jnp.sum((phi_next_obs - phi_obs) * skills, axis=1)
+    
+    def rnd_reward_pr_function(discrim_params, batch):
+        next_obs_embeddings = batch['next_obs_embedding']
+        
+        rnd_rep_target = discrim.apply(discrim_params, next_obs_embeddings)
+        rnd_rep_pred = jax.lax.stop_gradient(random_fn.apply(random_fn_params, next_obs_embeddings))
+        
+        return jnp.sqrt(jnp.square(rnd_rep_target - rnd_rep_pred).sum(axis=1))
+    
+    def apt_reward_pr_function(discrim_params, batch):
+        next_obs_embeddings = batch['next_obs_embedding']
+        
+        reps = discrim.apply(discrim_params, next_obs_embeddings)
+        sum_squares = jnp.square(reps).sum(axis=1)
+        dists = jnp.add.outer(sum_squares, sum_squares) - 2 * jnp.dot(reps, reps.T)
+        dists = jnp.sqrt(jnp.maximum(dists, 0.0))
+        
+        # Within each column of this matrix, find the k smallest values
+        dists = jnp.sort(dists, axis=1)
+        knns = dists[:, :config.apt_k]
+        knns_avg_dist = knns.mean(axis=1)
+        
+        return jnp.log(knns_avg_dist + 1.0)  # 1.0 for numerical stability
 
     def update_policy(reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, reward_pr_coeff, reward_gt_coeff, batch):
         def loss_fn(qlocal_params, reward_pr_coeff, reward_gt_coeff, batch):
@@ -175,6 +205,40 @@ def train(key, config, run_name, log):
             'reward': reward_mean
         }
         return qlocal_params, qlocal_opt_state, qtarget_params, policy_metrics
+    
+    def update_rnd_network(discrim_params, discrim_opt_state, batch):
+        def loss_fn(discrim_params, batch):
+            next_obs_embeddings = batch['next_obs_embedding']
+            
+            rnd_rep_pred = discrim.apply(discrim_params, next_obs_embeddings)
+            rnd_rep_target = jax.lax.stop_gradient(random_fn.apply(random_fn_params, next_obs_embeddings))
+            
+            loss = optax.l2_loss(rnd_rep_pred, rnd_rep_target).mean()
+            return loss
+        
+        loss, grads = jax.value_and_grad(loss_fn)(discrim_params, batch)
+        updates, discrim_opt_state = discrim_opt.update(grads, discrim_opt_state)
+        discrim_params = optax.apply_updates(discrim_params, updates)
+        
+        skill_learning_metrics = {
+            'rnd_loss': loss,
+            'rnd_grad_norm': grad_norm(grads)
+        }
+        return discrim_params, discrim_opt_state, skill_learning_metrics
+    
+    def update_apt_network(discrim_params, discrim_opt_state, batch):
+        def loss_fn(discrim_params, batch):
+            return None, None
+        
+        (loss, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(discrim_params, batch)
+        updates, discrim_opt_state = discrim_opt.update(grads, discrim_opt_state)
+        discrim_params = optax.apply_updates(discrim_params, updates)
+        
+        skill_learning_metrics = {
+            'apt_loss': loss,
+            'apt_grad_norm': grad_norm(grads)
+        }
+        return discrim_params, discrim_opt_state, skill_learning_metrics
     
     def update_diayn_discrim(discrim_params, discrim_opt_state, batch):
         def loss_fn(discrim_params, batch):
@@ -258,6 +322,18 @@ def train(key, config, run_name, log):
         return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, policy_metrics, skill_learning_metrics
     
     @jit
+    def full_rnd_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, reward_pr_coeff, reward_gt_coeff, batch):
+        qlocal_params, qlocal_opt_state, qtarget_params, policy_metrics = update_policy(rnd_reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, reward_pr_coeff, reward_gt_coeff, batch)
+        discrim_params, discrim_opt_state, skill_learning_metrics = update_rnd_network(discrim_params, discrim_opt_state, batch)
+        return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics
+    
+    @jit
+    def full_apt_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, reward_pr_coeff, reward_gt_coeff, batch):
+        qlocal_params, qlocal_opt_state, qtarget_params, policy_metrics = update_policy(apt_reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, reward_pr_coeff, reward_gt_coeff, batch)
+        discrim_params, discrim_opt_state, skill_learning_metrics = update_apt_network(discrim_params, discrim_opt_state, batch)
+        return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics
+    
+    @jit
     def reward_coeff_schedule_discrete(t_step):
         return jax.lax.cond(
             (t_step - config.warmup_steps) < config.pretraining_steps,
@@ -297,17 +373,28 @@ def train(key, config, run_name, log):
     skill_idx = random.randint(skill_init_key, minval=0, maxval=config.skill_size, shape=(config.vectorization,))
     eps = config.eps_start
     episodes = 0
+    just_mined_sapling = jnp.zeros((config.vectorization,), dtype=jnp.bool_)
+    plant_row_task_done_count = 0
 
     metrics = dict()
     for t_step in tqdm(range(config.steps), unit_scale=config.vectorization):
         skill = jax.nn.one_hot(skill_idx, config.skill_size)
         key, action = act(key, qlocal_params, obs, skill, eps)
+        key, is_mining_sapling = crafter_utils.is_mining_sapling(key, state, action, config.vectorization)
         key, step_key = random.split(key)
         next_obs, next_state, reward_gt, done, _ = env_step(random.split(step_key, config.vectorization), state, action, env_params)
         next_obs_embedding, _ = embedding_fn(next_obs)
         done_idx = jnp.argwhere(
             jnp.logical_or(done, steps_per_ep >= config.max_steps_per_ep)
         )
+        
+        plant_row_task_done_idx = jnp.argwhere(
+            jnp.logical_and(just_mined_sapling, is_mining_sapling)
+        )
+        if hasattr(config, 'task') and config.task == 'plant_row':
+            reward_gt = reward_gt.at[plant_row_task_done_idx].set(200.0)
+        plant_row_task_done_count += plant_row_task_done_idx.shape[0]
+        metrics['plant_row_task_done'] = plant_row_task_done_count
 
         steps_per_ep += 1
         episodes += done_idx.shape[0]
@@ -338,6 +425,10 @@ def train(key, config, run_name, log):
                     qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics = full_diayn_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, reward_pr_coeff, reward_gt_coeff, batch)
                 elif config.skill_learning_method == 'metra':
                     qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, policy_metrics, skill_learning_metrics = full_metra_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, metra_lambda, metra_lambda_opt_state, reward_pr_coeff, reward_gt_coeff, batch)
+                elif config.skill_learning_method == 'rnd':
+                    qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics = full_rnd_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, reward_pr_coeff, reward_gt_coeff, batch)
+                elif config.skill_learning_method == 'apt':
+                    qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics = full_apt_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, reward_pr_coeff, reward_gt_coeff, batch)
                 else:
                     raise NotImplementedError(f'Unknown skill learning method: {config.skill_learning_method}')
             metrics.update(policy_metrics)
@@ -380,12 +471,16 @@ def train(key, config, run_name, log):
             }
             if config.skill_learning_method == 'metra':
                 to_save['metra_lambda'] = metra_lambda
+            elif config.skill_learning_method == 'rnd':
+                to_save['random_fn_params'] = random_fn_params
             jnp.savez(os.path.join(os.getcwd(), 'data', run_name), **to_save)
 
         obs, obs_embedding, state = next_obs, next_obs_embedding, next_state
         if t_step > config.warmup_steps:
             eps = max(eps * config.eps_decay, config.eps_end)
         steps_per_ep = steps_per_ep.at[done_idx].set(0)
+        just_mined_sapling = is_mining_sapling
+        just_mined_sapling = just_mined_sapling.at[done_idx].set(0)
         key, skill_update_key = random.split(key)
         skill_idx = jnp.where(
             done,

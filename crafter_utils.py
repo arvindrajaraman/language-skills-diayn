@@ -226,3 +226,18 @@ def bin_timesteps(timesteps):
     bins = bins.at[(timesteps >= 300) & (timesteps < 400)].set(6)
     bins = bins.at[(timesteps >= 400)].set(7)
     return bins
+
+from craftax.craftax_classic.constants import BlockType, DIRECTIONS, Action
+from functools import partial
+from jax import jit
+
+@partial(jit, static_argnames=('vectorization',))
+def is_mining_sapling(key, state, action, vectorization):
+    key, subkey = jax.random.split(key)
+    block_position = state.player_position + DIRECTIONS[state.player_direction]
+    is_mining_sapling = jnp.logical_and(
+        state.map[jnp.arange(vectorization), block_position[:, 0], block_position[:, 1]] == BlockType.GRASS.value,
+        jax.random.uniform(subkey) < 0.1,
+    )
+    doing_do = (action == Action.DO)
+    return key, jnp.logical_and(is_mining_sapling, doing_do)
