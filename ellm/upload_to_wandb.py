@@ -72,7 +72,7 @@ for file in files:
                 neginf=0.0
             )
             metrics = dict()
-            metrics['crafter_score'] = crafter_score
+            metrics['score/crafter'] = crafter_score
             
             for achievement_name, achievement_freq in zip(achievement_names, achievement_counts):
                 metrics[f'achievements/{achievement_name}'] = achievement_freq
