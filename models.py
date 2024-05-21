@@ -227,3 +227,33 @@ class DiscriminatorCraftax(nn.Module):
         x = nn.relu(x)
         x = nn.Dense(features=self.skill_size)(x)
         return x
+
+class APTForwardDynamicsModel(nn.Module):
+    action_size: int
+    skill_size: int
+    hidden_size: int
+    
+    @nn.compact
+    def __call__(self, embedding, action):
+        action_1h = jax.nn.one_hot(action, self.action_size)
+        x = jnp.concatenate((embedding, action_1h), axis=-1)
+        x = nn.Dense(features=self.hidden_size)(x)
+        x = nn.relu(x)
+        x = nn.Dense(features=self.hidden_size)(x)
+        x = nn.relu(x)
+        x = nn.Dense(features=self.skill_size)(x)
+        return x
+    
+class APTBackwardDynamicsModel(nn.Module):
+    action_size: int
+    hidden_size: int
+    
+    @nn.compact
+    def __call__(self, embedding1, embedding2):
+        x = jnp.concatenate((embedding1, embedding2), axis=-1)
+        x = nn.Dense(features=self.hidden_size)(x)
+        x = nn.relu(x)
+        x = nn.Dense(features=self.hidden_size)(x)
+        x = nn.relu(x)
+        x = nn.Dense(features=self.action_size)(x)
+        return x

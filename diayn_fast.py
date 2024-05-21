@@ -25,7 +25,7 @@ from tqdm import tqdm
 import wandb
 
 import diayn_utils
-from models import QNetCraftax, DiscriminatorCraftax, Discriminator
+from models import QNetCraftax, DiscriminatorCraftax, Discriminator, APTForwardDynamicsModel, APTBackwardDynamicsModel
 from structures import ReplayBuffer
 from utils import grad_norm
 import crafter_constants
@@ -81,6 +81,23 @@ def train(key, config, run_name, log):
             hidden_size=config.discrim_units
         )
         random_fn_params = random_fn.init(random_fn_key, dummy_embedding)
+    elif config.skill_learning_method == 'apt':
+        key, forward_model_key, backward_model_key = jax.random.split(key, num=3)
+        forward_model = APTForwardDynamicsModel(
+            action_size=config.action_size,
+            skill_size=config.state_size,
+            hidden_size=config.discrim_units
+        )
+        forward_model_params = forward_model.init(forward_model_key, dummy_skill, jnp.zeros((1,)))
+        forward_model_opt = optax.adam(learning_rate=config.discrim_lr)
+        forward_model_opt_state = forward_model_opt.init(forward_model_params)
+        backward_model = APTBackwardDynamicsModel(
+            action_size=config.action_size,
+            hidden_size=config.discrim_units
+        )
+        backward_model_params = backward_model.init(backward_model_key, dummy_skill, dummy_skill)
+        backward_model_opt = optax.adam(learning_rate=config.discrim_lr)
+        backward_model_opt_state = backward_model_opt.init(backward_model_params)
 
     buffer = ReplayBuffer.create({
         'obs': onp.zeros((config.state_size,)),
@@ -164,7 +181,7 @@ def train(key, config, run_name, log):
         
         reps = discrim.apply(discrim_params, next_obs_embeddings)
         sum_squares = jnp.square(reps).sum(axis=1)
-        dists = jnp.add.outer(sum_squares, sum_squares) - 2 * jnp.dot(reps, reps.T)
+        dists = jnp.outer(sum_squares, sum_squares) - 2 * jnp.dot(reps, reps.T)
         dists = jnp.sqrt(jnp.maximum(dists, 0.0))
         
         # Within each column of this matrix, find the k smallest values
@@ -226,19 +243,38 @@ def train(key, config, run_name, log):
         }
         return discrim_params, discrim_opt_state, skill_learning_metrics
     
-    def update_apt_network(discrim_params, discrim_opt_state, batch):
-        def loss_fn(discrim_params, batch):
-            return None, None
+    def update_apt_network(discrim_params, discrim_opt_state, forward_model_params, forward_model_opt_state, backward_model_params, backward_model_opt_state, batch):
+        def loss_fn(discrim_params, forward_model_params, backward_model_params, batch):
+            obs_embeddings, actions, next_obs_embeddings = batch['obs_embedding'], batch['action'], batch['next_obs_embedding']
+            
+            obs_apt_encoding = discrim.apply(discrim_params, obs_embeddings)
+            next_obs_apt_encoding = discrim.apply(discrim_params, next_obs_embeddings)
+            
+            next_obs_hat = forward_model.apply(forward_model_params, obs_apt_encoding, actions)
+            action_hat = backward_model.apply(backward_model_params, obs_apt_encoding, next_obs_apt_encoding)
+            
+            forward_error = optax.l2_loss(next_obs_hat, next_obs_embeddings).mean()
+            backward_error = optax.softmax_cross_entropy_with_integer_labels(action_hat, actions).mean()
+            loss = forward_error + backward_error
+            return loss, (forward_error, backward_error)
         
-        (loss, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(discrim_params, batch)
-        updates, discrim_opt_state = discrim_opt.update(grads, discrim_opt_state)
-        discrim_params = optax.apply_updates(discrim_params, updates)
+        (loss, (forward_error, backward_error)), (discrim_grads, forward_model_grads, backward_model_grads) = jax.value_and_grad(loss_fn, has_aux=True, argnums=(0, 1, 2))(discrim_params, forward_model_params, backward_model_params, batch)
+        
+        discrim_updates, discrim_opt_state = discrim_opt.update(discrim_grads, discrim_opt_state)
+        discrim_params = optax.apply_updates(discrim_params, discrim_updates)
+        
+        forward_model_updates, forward_model_opt_state = forward_model_opt.update(forward_model_grads, forward_model_opt_state)
+        forward_model_params = optax.apply_updates(forward_model_params, forward_model_updates)
+        
+        backward_model_updates, backward_model_opt_state = backward_model_opt.update(backward_model_grads, backward_model_opt_state)
+        backward_model_params = optax.apply_updates(backward_model_params, backward_model_updates)
         
         skill_learning_metrics = {
             'apt_loss': loss,
-            'apt_grad_norm': grad_norm(grads)
+            'forward_error': forward_error,
+            'backward_error': backward_error
         }
-        return discrim_params, discrim_opt_state, skill_learning_metrics
+        return discrim_params, discrim_opt_state, forward_model_params, forward_model_opt_state, backward_model_params, backward_model_opt_state, skill_learning_metrics
     
     def update_diayn_discrim(discrim_params, discrim_opt_state, batch):
         def loss_fn(discrim_params, batch):
@@ -328,10 +364,10 @@ def train(key, config, run_name, log):
         return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics
     
     @jit
-    def full_apt_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, reward_pr_coeff, reward_gt_coeff, batch):
+    def full_apt_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, forward_model_params, forward_model_opt_state, backward_model_params, backward_model_opt_state, reward_pr_coeff, reward_gt_coeff, batch):
         qlocal_params, qlocal_opt_state, qtarget_params, policy_metrics = update_policy(apt_reward_pr_function, qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, reward_pr_coeff, reward_gt_coeff, batch)
-        discrim_params, discrim_opt_state, skill_learning_metrics = update_apt_network(discrim_params, discrim_opt_state, batch)
-        return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics
+        discrim_params, discrim_opt_state, forward_model_params, forward_model_opt_state, backward_model_params, backward_model_opt_state, skill_learning_metrics = update_apt_network(discrim_params, discrim_opt_state, forward_model_params, forward_model_opt_state, backward_model_params, backward_model_opt_state, batch)
+        return qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, forward_model_params, forward_model_opt_state, backward_model_params, backward_model_opt_state, policy_metrics, skill_learning_metrics
     
     @jit
     def reward_coeff_schedule_discrete(t_step):
@@ -428,7 +464,7 @@ def train(key, config, run_name, log):
                 elif config.skill_learning_method == 'rnd':
                     qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics = full_rnd_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, reward_pr_coeff, reward_gt_coeff, batch)
                 elif config.skill_learning_method == 'apt':
-                    qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, policy_metrics, skill_learning_metrics = full_apt_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, reward_pr_coeff, reward_gt_coeff, batch)
+                    qlocal_params, qlocal_opt_state, qtarget_params, discrim_params, discrim_opt_state, forward_model_params, forward_model_opt_state, backward_model_params, backward_model_opt_state, policy_metrics, skill_learning_metrics = full_apt_update(qlocal_params, qtarget_params, qlocal_opt_state, discrim_params, discrim_opt_state, forward_model_params, forward_model_opt_state, backward_model_params, backward_model_opt_state, reward_pr_coeff, reward_gt_coeff, batch)
                 else:
                     raise NotImplementedError(f'Unknown skill learning method: {config.skill_learning_method}')
             metrics.update(policy_metrics)
@@ -473,6 +509,9 @@ def train(key, config, run_name, log):
                 to_save['metra_lambda'] = metra_lambda
             elif config.skill_learning_method == 'rnd':
                 to_save['random_fn_params'] = random_fn_params
+            elif config.skill_learning_method == 'apt':
+                to_save['forward_model_params'] = forward_model_params
+                to_save['backward_model_params'] = backward_model_params
             jnp.savez(os.path.join(os.getcwd(), 'data', run_name), **to_save)
 
         obs, obs_embedding, state = next_obs, next_obs_embedding, next_state
