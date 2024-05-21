@@ -3,7 +3,7 @@ batch_size: 128
 buffer_size: 10080
 env_name: LunarLander-v2
 
-steps: 800000
+steps: 1000000
 max_steps_per_ep: 1000
 save_freq: 200000
 vis_freq: 100000

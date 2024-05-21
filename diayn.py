@@ -49,8 +49,7 @@ def train(key, config, run_name, log):
 
     qlocal = QNetModel(
         action_size=config.action_size,
-        hidden1_size=config.policy_units,
-        hidden2_size=config.policy_units
+        hidden_size=config.policy_units
     )
     qlocal_params = qlocal.init(qlocal_key, dummy_state, dummy_skill)
     qlocal_opt = optax.adam(learning_rate=config.policy_lr)
@@ -58,15 +57,13 @@ def train(key, config, run_name, log):
 
     qtarget = QNetModel(
         action_size=config.action_size,
-        hidden1_size=config.policy_units,
-        hidden2_size=config.policy_units
+        hidden_size=config.policy_units
     )
     qtarget_params = qtarget.init(qtarget_key, dummy_state, dummy_skill)
 
     discrim = DiscriminatorModel(
         skill_size=config.skill_size,
-        hidden1_size=config.discrim_units,
-        hidden2_size=config.discrim_units
+        hidden_size=config.discrim_units
     )
     discrim_params = discrim.init(discrim_key, dummy_embedding)
     discrim_opt = optax.adam(learning_rate=config.discrim_lr)
