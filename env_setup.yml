@@ -1,4 +1,4 @@
-name: diayn
+name: diayn5
 channels:
   - conda-forge
 dependencies:

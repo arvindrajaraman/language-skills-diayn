@@ -93,7 +93,7 @@ def train(key, config, run_name, log):
 
     action_skill_mtx = onp.zeros((config.skill_size, config.action_size))
     if config.env_name == 'LunarLander-v2' and config.skill_size == 3 and config.embedding_type == '1h':
-        goal_skill_mtx = onp.zeros((3, 3))
+        skill_goal_mtx = onp.zeros((3, 3))
         min_x = -1.
         max_x = 1.
         min_y = 0.
@@ -283,7 +283,7 @@ def train(key, config, run_name, log):
                 # Goal classification
                 for idx in done_idx:
                     goal_idx = lunar_utils.classify_goal(obs[idx, 0])
-                    goal_skill_mtx[skill_idx[idx].item(), goal_idx] += 1
+                    skill_goal_mtx[skill_idx[idx].item(), goal_idx] += 1
 
                 if (t_step % config.vis_freq == 10 or t_step == config.steps - 1):
                     for i in range(config.skill_size):
@@ -405,7 +405,8 @@ if __name__ == '__main__':
 
     devices = jax.devices()
     print(f'{len(devices)} devices visible through JAX: {devices}')
-    config.num_workers = len(devices)
+    # config.num_workers = len(devices)
+    config.num_workers = 100
 
     key = random.PRNGKey(config.seed)
     train(key, config, run_name, log=not args.nolog)

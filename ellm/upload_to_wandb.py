@@ -8,28 +8,28 @@ import numpy as np
 files = os.listdir("ellm/data")
 
 achievement_names = [
-    'collect_coal',
-    'collect_diamond',
-    'collect_drink',
-    'collect_iron',
-    'collect_sapling',
-    'collect_stone',
-    'collect_wood',
-    'defeat_skeleton',
-    'defeat_zombie',
-    'eat_cow',
-    'eat_plant',
-    'make_iron_pickaxe',
-    'make_iron_sword',
-    'make_stone_pickaxe',
-    'make_stone_sword',
-    'make_wood_pickaxe',
-    'make_wood_sword',
-    'place_furnace',
-    'place_plant',
-    'place_stone',
-    'place_table',
-    'wake_up'
+    'collect coal',
+    'collect diamond',
+    'collect drink',
+    'collect iron',
+    'collect sapling',
+    'collect stone',
+    'collect wood',
+    'defeat skeleton',
+    'defeat zombie',
+    'eat cow',
+    'eat plant',
+    'make iron pickaxe',
+    'make iron sword',
+    'make stone pickaxe',
+    'make stone sword',
+    'make wood pickaxe',
+    'make wood sword',
+    'place furnace',
+    'place plant',
+    'place stone',
+    'place table',
+    'wake up'
 ]
 
 for file in files:
@@ -76,6 +76,7 @@ for file in files:
             
             for achievement_name, achievement_freq in zip(achievement_names, achievement_counts):
                 metrics[f'achievements/{achievement_name}'] = achievement_freq
+                metrics['steps'] = step
                 
             wandb.log(metrics, step=step)
             
