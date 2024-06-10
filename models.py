@@ -257,3 +257,23 @@ class APTBackwardDynamicsModel(nn.Module):
         x = nn.relu(x)
         x = nn.Dense(features=self.action_size)(x)
         return x
+
+class Captioner(nn.Module):
+    hidden_size: int
+    
+    @nn.compact
+    def __call__(self, state):
+        maps, metadata = jnp.split(state, [7 * 9 * 21], axis=-1)
+        maps = maps.reshape((-1, 7, 9, 21))
+        
+        maps = nn.Conv(features=1, kernel_size=(7, 9), padding='SAME')(maps)
+        maps = nn.relu(maps)
+        maps = maps.reshape((maps.shape[0], -1))
+        
+        x = jnp.concatenate((maps, metadata), axis=-1)
+        x = nn.Dense(features=self.hidden_size)(x)
+        x = nn.relu(x)
+        x = nn.Dense(features=self.hidden_size)(x)
+        x = nn.relu(x)
+        x = nn.Dense(features=self.hidden_size)(x)
+        return x

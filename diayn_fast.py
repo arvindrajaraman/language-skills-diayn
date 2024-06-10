@@ -25,7 +25,7 @@ from tqdm import tqdm
 import wandb
 
 import diayn_utils
-from models import QNetCraftax, DiscriminatorCraftax, Discriminator, APTForwardDynamicsModel, APTBackwardDynamicsModel
+from models import QNetCraftax, DiscriminatorCraftax, Discriminator, APTForwardDynamicsModel, APTBackwardDynamicsModel, Captioner
 from structures import ReplayBuffer
 from utils import grad_norm
 import crafter_constants
@@ -114,14 +114,24 @@ def train(key, config, run_name, log):
         embedding_fn = lambda next_obs: (next_obs, None)
     elif config.embedding_type == '1h':
         embedding_fn = lambda next_obs: lunar_utils.embedding_1he(next_obs[:, 0])
-    elif config.embedding_type == 'crafter':
-        embedding_model = crafter_utils.new_embedding_model()
-        embedding_fn = lambda next_obs: crafter_utils.embedding_crafter(embedding_model, next_obs)
-    elif config.embedding_type == 'crafter_and_identity':
-        embedding_model = crafter_utils.new_embedding_model()
-        def embedding_fn(next_obs):
-            embedding, _ = crafter_utils.embedding_crafter(embedding_model, next_obs)
-            return jnp.concatenate((embedding, next_obs), axis=-1), None
+    # elif config.embedding_type == 'crafter':
+    #     embedding_model = crafter_utils.new_embedding_model()
+    #     embedding_fn = lambda next_obs: crafter_utils.embedding_crafter(embedding_model, next_obs)
+    # elif config.embedding_type == 'crafter_and_identity':
+    #     embedding_model = crafter_utils.new_embedding_model()
+    #     def embedding_fn(next_obs):
+    #         embedding, _ = crafter_utils.embedding_crafter(embedding_model, next_obs)
+    #         return jnp.concatenate((embedding, next_obs), axis=-1), None
+    elif config.embedding_type == 'crafter' or config.embedding_type == 'crafter_and_identity':
+        key, captioner_key = jax.random.split(key)
+        captioner = Captioner(hidden_size=config.embedding_size)
+        captioner_params = jnp.load('crafter_captioner.npz', allow_pickle=True)['params'].item()
+        if config.embedding_type == 'crafter':
+            def embedding_fn(next_obs):
+                next_obs = captioner.apply(captioner_params, next_obs)
+                return next_obs, None
+        else:
+            embedding_fn = lambda next_obs: (jnp.concatenate((captioner.apply(captioner_params, next_obs), next_obs), axis=-1), None)
     else:
         raise ValueError(f"Invalid embedding type: {config['embedding_type']}")
 
@@ -409,28 +419,17 @@ def train(key, config, run_name, log):
     skill_idx = random.randint(skill_init_key, minval=0, maxval=config.skill_size, shape=(config.vectorization,))
     eps = config.eps_start
     episodes = 0
-    just_mined_sapling = jnp.zeros((config.vectorization,), dtype=jnp.bool_)
-    plant_row_task_done_count = 0
 
     metrics = dict()
     for t_step in tqdm(range(config.steps), unit_scale=config.vectorization):
         skill = jax.nn.one_hot(skill_idx, config.skill_size)
         key, action = act(key, qlocal_params, obs, skill, eps)
-        key, is_mining_sapling = crafter_utils.is_mining_sapling(key, state, action, config.vectorization)
         key, step_key = random.split(key)
         next_obs, next_state, reward_gt, done, _ = env_step(random.split(step_key, config.vectorization), state, action, env_params)
         next_obs_embedding, _ = embedding_fn(next_obs)
         done_idx = jnp.argwhere(
             jnp.logical_or(done, steps_per_ep >= config.max_steps_per_ep)
         )
-        
-        plant_row_task_done_idx = jnp.argwhere(
-            jnp.logical_and(just_mined_sapling, is_mining_sapling)
-        )
-        if hasattr(config, 'task') and config.task == 'plant_row':
-            reward_gt = reward_gt.at[plant_row_task_done_idx].set(200.0)
-        plant_row_task_done_count += plant_row_task_done_idx.shape[0]
-        metrics['plant_row_task_done'] = plant_row_task_done_count
 
         steps_per_ep += 1
         episodes += done_idx.shape[0]
@@ -518,8 +517,6 @@ def train(key, config, run_name, log):
         if t_step > config.warmup_steps:
             eps = max(eps * config.eps_decay, config.eps_end)
         steps_per_ep = steps_per_ep.at[done_idx].set(0)
-        just_mined_sapling = is_mining_sapling
-        just_mined_sapling = just_mined_sapling.at[done_idx].set(0)
         key, skill_update_key = random.split(key)
         skill_idx = jnp.where(
             done,

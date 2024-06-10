@@ -196,7 +196,7 @@ def embedding_crafter(embedding_model, next_obs):
         else:
             health_str = 'You are at full health.'
 
-        desc = [status_str, health_str]
+        desc = ['You are playing a Minecraft-like survival game.', status_str, health_str]
         if len(blocks_gt0) > 0:
             desc.append(blocks_str)
         if len(mobs_gt0) > 0:
