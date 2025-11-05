@@ -2,4 +2,4 @@
 
 **Arvind Rajaraman, Vivek Myers, Anca Dragan**
 
-See diayn.py and agents/diayn_agent.py for code samples.
+**Note**, this is an unpublished/unpolished repo. See diayn.py and agents/diayn_agent.py for code samples.
